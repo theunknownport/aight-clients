@@ -3,7 +3,9 @@
 Client libraries that instrument your agent's LLM calls, attribute the cost
 to the exact source line that issued them, and push that data to the
 [AIght Workspace](https://aight.studio) at aight.studio (the Integrate tab
-mints the API key).
+mints the API key). The Python install also carries four collectors and a
+proxy, which bring in the same spend from agents you run but did not write —
+see **Collectors, and the proxy** below.
 
 Every SDK implements the same small surface:
 
@@ -105,6 +107,91 @@ language-specific integration recipe for an AI coding agent — each
 language's README has a "Deploy with your AI coding agent" section with the
 one-line prompt to hand it.
 
+## Collectors, and the proxy
+
+`pip install aight` installs more than the library. It also puts five commands
+on your path that report spend from agents you run but did not write:
+
+| Command | What it does |
+|---|---|
+| `aight-collect` | Collects from Claude Code's transcripts (`~/.claude/projects`) |
+| `aight-collect-codex` | Codex CLI sessions (`~/.codex/sessions`, `CODEX_HOME` respected) |
+| `aight-collect-gemini` | Gemini CLI sessions (reads `~/.gemini/tmp`) |
+| `aight-collect-aider` | Aider's analytics log — **you must pass the path**; see below |
+| `aight-proxy` | Proxies any agent's API traffic and reports what it spends |
+
+**Why these exist beside the SDKs.** The SDKs instrument *your* code: they
+walk the call stack to attribute spend to the line that issued the call. An
+agent you run but did not write — Claude Code, Codex — has no line of yours on
+the stack, so there is nothing to instrument. AIght reads the agent's own
+on-disk record instead, and those rows arrive as `kind: "external"`: frame 0
+is the agent id and frame 1 is the step it took (the tool and the file),
+because there is no source line to point at.
+
+**Aider cannot backfill, and that is the one asymmetry.** Every other
+collector reads a record its agent kept by default. Aider writes a per-call
+log only if it was started with `--analytics-log FILE` or `AIDER_ANALYTICS_LOG`
+was set, and it has no default path at all — a session that already ran
+without that flag recorded nothing, and nothing recovers it.
+`aight-collect-aider` says so when it has nothing to read, rather than
+reporting an empty result as success.
+
+The four collectors share their flags: a per-file resume marker under
+`~/.aight/` (one file per collector — `claude_code_collect.json`,
+`codex_collect.json`, `gemini_collect.json`, `aider_collect.json`) so a plain
+re-run sends only what is new, plus `--dry-run`, `--since <ISO date|git rev>`,
+`--all-time`, `--root`, and `--watch [--interval SECONDS]`. `--all-projects`
+widens past the default root where the default is not already everything.
+
+`--watch` re-scans on an interval — 30 seconds unless `--interval` says
+otherwise — until you interrupt it, so spend is reported while the agent is
+still running rather than whenever someone remembers to run the command. It
+refuses `--since` and `--all-time`, deliberately: those name a scope to
+re-send, and the ingest API *adds* what it receives, so a loop would re-send
+that scope every interval and double the figures permanently.
+
+`--all-time` is the other way to double them, which is why it is worth saying
+twice. A plain run resumes from the marker; `--all-time` does not, and
+re-pushes the history. Because the API adds on conflict and the platform
+freezes cost at receive time, running it twice over the same transcripts
+doubles the recorded spend with no repair path.
+
+**The proxy is the fallback for what no parser covers**, including agents
+whose records cannot be read at all: Cursor keeps no per-call token counts on
+disk, and Amp emits no model name anywhere in its stream. Rather than a fourth
+parser, it stands between the agent and the API:
+
+```bash
+aight-proxy                       # listens on 127.0.0.1:8787
+export OPENAI_BASE_URL=http://127.0.0.1:8787/openai
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic
+```
+
+The path prefix picks the upstream — both APIs live under `/v1/`, so the
+prefix is what separates them. Everything after it is forwarded unchanged,
+including the client's own `Authorization` header; the proxy holds no
+credentials of its own. It measures real latency, which the SDKs cannot,
+because they record after the call and would only be timing the recording.
+Streaming responses are forwarded event by event rather than buffered, so a
+streaming agent stays streaming. The one request it alters is a streaming
+OpenAI call, where it sets `stream_options.include_usage` — without it the
+stream carries no token counts at all, and most agents do not ask for it.
+
+**Each parser reconciles a different provider convention**, and this is the
+part to get right if you write your own. Claude Code's cache fields are
+*additive* to `input_tokens`; Codex's `cached_input_tokens` is a *subset* of
+`input_tokens` and is subtracted; the proxy subtracts OpenAI's `cached_tokens`
+for that same reason and subtracts nothing for Anthropic, which already
+reports the uncached prompt. Every row the wire protocol below describes wants
+the Anthropic shape, so a converter has to know which convention its source
+used.
+
+One path is stated with less confidence than the rest: the Gemini collector
+reads `~/.gemini/tmp`, and that root is a named constant in the code rather
+than a path confirmed against a running Gemini. A wrong root is not a wrong
+number — the run says it found nothing to collect, and `--root` or
+`--all-projects` is the way past it.
+
 ## Wire protocol
 
 All four push the same JSON to the same endpoints, so a new language SDK just
@@ -123,6 +210,8 @@ X-Aight-Sdk-Version: 0.1.0          # optional, ditto
       { "filepath": "/app/agent.py",  "lineno": 12, "function": "run" },
       { "filepath": "/app/steps.py",  "lineno": 42, "function": "call_llm" }
     ],
+    "kind": "external",              # optional, default "internal";
+                                     # "external" for a collected agent
     "calls": 3,
     "model": "gpt-4o-mini",          # optional
     "input_tokens": 540,             # optional, the *uncached* prompt
@@ -153,6 +242,14 @@ spend is attributed to; the **first** frame's filepath is the "agent" the
 fleet view groups by — so a one-frame chain (what the Node, Go and Java SDKs
 send today) means "the calling line is the agent". Frames may also carry
 `snippet` / `snippet_start` to show source context in the drilldown.
+
+`kind` is optional and defaults to `"internal"`; send `"external"` for an
+agent you run but did not write, where frame 0 is the agent id rather than a
+source file — the shape the collectors above produce. It is the one field on a
+row that is not last-write-wins: the first row that establishes an agent fixes
+its kind, and a later push that disagrees is rejected with a 400, with the
+whole batch rolled back and nothing from it stored. A row that omits `kind`
+cannot reset an agent that is already external; it inherits what is stored.
 
 When `model` and the token counts are present the server prices the row from
 its own table. Rows are stored per **(call site, model)**, so send one row per
