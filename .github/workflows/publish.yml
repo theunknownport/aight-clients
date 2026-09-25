@@ -1,0 +1,74 @@
+# Releases, triggered by a tag.
+#
+# The tag convention is `<language>/v<version>` — `python/v0.1.0`, not
+# `v0.1.0`. Go requires the prefix: a module in a subdirectory is only
+# resolvable if its tag carries the directory name, so a bare `v0.1.0` leaves
+# `github.com/theunknownport/aight-clients/go` unreachable with "no matching
+# versions" even though the tag plainly exists. The other three do not need the
+# prefix, but they use it too so one tag names one package unambiguously.
+#
+# Go and Java have no job here. Go needs none — pushing the tag *is* the
+# release, and the module proxy picks it up on first request. Java is not
+# published anywhere yet: Maven Central needs a Sonatype account, a GPG
+# signature on every artifact and a manual release review.
+name: publish
+
+on:
+  push:
+    tags:
+      - "python/v*"
+      - "node/v*"
+      - "go/v*"
+      - "java/v*"
+
+jobs:
+  python:
+    if: startsWith(github.ref, 'refs/tags/python/')
+    runs-on: ubuntu-latest
+    # Matched literally against the trusted publisher configured on PyPI. If
+    # this key is removed or renamed, publishing fails with an OIDC error that
+    # does not say which half is wrong.
+    environment: pypi
+    permissions:
+      # Mints the OIDC token PyPI exchanges for a short-lived upload credential.
+      # Without it the publish step has no credential at all and fails.
+      id-token: write
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+
+  node:
+    if: startsWith(github.ref, 'refs/tags/node/')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      # Node 22 ships npm 10, and trusted publishing needs 11.5.1 or newer.
+      # Below that the CLI does not attempt OIDC at all.
+      - run: npm install -g npm@latest
+      # Deliberately no NODE_AUTH_TOKEN. Setting it — even to an empty string —
+      # makes npm take the token path first and never fall through to OIDC,
+      # which fails as a bare 404 that looks like a missing package.
+      #
+      # This cannot bootstrap a package that does not exist yet: npm's trusted
+      # publishing only applies to a package that is already published, so
+      # 0.1.0 had to go up once by hand. Everything after it goes through here.
+      - run: npm publish --access public

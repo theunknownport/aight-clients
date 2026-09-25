@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>studio.aight</groupId>
+  <artifactId>aight-sdk</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>aight</name>
+  <description>Attribute LLM spend to the exact source line, and push it to your AIght Workspace at aight.studio.</description>
+
+  <licenses>
+    <!-- The licence text itself is the LICENSE file in this directory; this is
+         the declaration Maven and other tooling read. -->
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <!-- Zero third-party dependencies: java.net.http.HttpClient (11+) covers
+       the push, StackWalker (9+) covers caller attribution, and the bodies are
+       written by hand (Remote carries the one small JSON reader it needs for
+       an ingest response). -->
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <!-- Tracing resolves a caller's file the way StackWalker reports it —
+               a basename — and then reads it relative to the working directory.
+               Running the tests from the source directory is what lets the
+               snippet test read a real source line, instead of failing the way
+               it does for a packaged app. Test-only; nothing else here reads
+               the working directory. -->
+          <workingDirectory>${project.basedir}/src/test/java/studio/aight/sdk</workingDirectory>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

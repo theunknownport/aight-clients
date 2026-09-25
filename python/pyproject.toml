@@ -1,0 +1,55 @@
+[project]
+name = "aight"
+version = "0.1.0"
+description = "Attribute LLM spend to the exact source line, and push it to the AIght Workspace at aight.studio."
+# SPDX identifier; the text it refers to is the LICENSE file in this directory.
+# The bare string is PEP 639, which is why the build floor below is setuptools
+# 77 — older versions want the deprecated {text = "Apache-2.0"} table instead.
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+examples = ["langgraph>=0.2"]
+openai = ["opentelemetry-instrumentation-openai>=0.30.0"]
+anthropic = ["opentelemetry-instrumentation-anthropic>=0.30.0"]
+
+[project.scripts]
+# The Claude Code collector, installed alongside the SDK rather than kept as a
+# script in a repo the customer would have to clone. This package is otherwise
+# a library you import; this is the one thing you run.
+aight-collect = "aight.collect.claude_code:cli"
+
+[project.urls]
+Homepage = "https://aight.studio"
+Repository = "https://github.com/theunknownport/aight-clients"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+# Scoped here rather than left to rootdir discovery, so a `pytest` run from the
+# repo root does not walk into node/, go/ and java/ — those three are run by
+# their own toolchains, and go/ and java/ have no Python tests to find anyway.
+testpaths = ["tests"]
+# test_tracing.py imports examples.langgraph_spike, and `examples` is
+# deliberately repo-only: the find directive above pulls in `aight*` alone, so
+# the installed package never carries it. An editable install therefore does
+# not put it on sys.path either, and without this line the whole suite dies at
+# collection rather than at a test. Adding the SDK root is what makes a
+# repo-only import resolve.
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["aight*"]
+
+[tool.setuptools.package-data]
+# Ships inside the installed package so an AI coding agent can read exact
+# integration instructions locally, right after `pip install` — no need for a
+# checkout to be reachable.
+aight = ["AGENTS.md"]
