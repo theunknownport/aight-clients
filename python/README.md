@@ -114,6 +114,11 @@ push_value(VALUE_BY_FILE)
 acknowledged — so calling it every flush sends each earning once, and a failed
 push keeps the total for the retry instead of losing it.
 
+It takes that map as an argument rather than reading a global, which makes it
+also the way to report value for an agent you did not write — pass the agent id
+the collector uses as the filepath. See [External
+agents](#external-agents) below.
+
 ## Local-only mode
 
 Skip `push()` and call `COST_PROCESSOR.report()` instead — a plain-text
@@ -145,6 +150,24 @@ It reads Claude Code's transcripts under `~/.claude/projects` and pushes one
 row per step the agent took, under an external agent called `claude-code`. Cost
 lands on the step — the tool it called and the file it touched — rather than on
 a source line, because no source line of yours is involved.
+
+That is the spend side. **Earnings you report yourself** — a collector reads
+token counts, not what the work was worth, and no SDK can infer it. Push them
+against the agent's id:
+
+```python
+from aight.remote import push_value
+
+push_value({"claude-code": 49.0})  # the id the collector roots its rows at
+```
+
+The Workspace shows that on `claude-code` exactly as it shows an agent of your
+own: the earned total, the net, the ratio, and the earning-or-burning status
+that goes with them. What an external agent never gets is a **matched** figure
+— the matching engine's time-window fallback excludes external rows outright,
+because a collector pushes no timestamp and an external row would always be the
+newest thing in the window and win the guess by default. Reported, yes; guessed,
+no.
 
 Leave it running and the spend appears as you work, rather than whenever you
 next remember to run it:

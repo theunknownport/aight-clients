@@ -43,6 +43,8 @@ You should see the project's own file/line, not a framework's internal dispatch 
 Only call Tracing.reportValue if this project has a real, countable signal for what it earned — never invent or estimate a number:
 Tracing.reportValue(49.0);
 Remote.pushValue(null, null);
+For an agent the user runs but this project does not contain — Claude Code, Gemini, Codex, traced by aight's collectors — post its earnings against the agent id instead. pushValue flushes the map reportValue filled, keyed by your calling class, and an external agent has no class of yours. POST /api/ingest/value with [{"filepath":"claude-code","value_usd":49.0}] and Authorization: Bearer $AIGHT_API_KEY does it; java/README.md has the HttpClient snippet. Same rule — a real, countable amount, or nothing.
+Such an agent shows a reported figure in the Workspace like any other. It never shows a matched one: the matching engine excludes external rows from its time-window fallback, so do not try to give it one through pushEvent.
 7. Optional: Trace ids and business events
 A trace id makes the match between a run and its outcome explicit instead of a time-window guess. Pass one to the traced call:
 Tracing.tracedLlmCall(model, in, out, new Tracing.CallInfo(0, 0, 0, runId));

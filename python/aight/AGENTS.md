@@ -32,6 +32,10 @@ from aight.tracing import report_value, VALUE_BY_FILE
 from aight.remote import push_value
 report_value(49.0)
 push_value(VALUE_BY_FILE)
+For an agent the user runs but this project does not contain — Claude Code, Gemini, Codex, traced by aight's collectors — earnings go in by agent id, because there is no calling file of theirs to resolve. push_value takes the map, so pass one directly, on the same rule:
+from aight.remote import push_value
+push_value({"claude-code": 49.0})  # the agent id the collector roots its rows at
+That agent then shows a reported figure in the Workspace like any other. It never shows a matched one: the matching engine excludes external rows from its time-window fallback, so do not try to give it one through push_event.
 7. Optional: Agnostic business matching, Trace IDs & Labels
 To link LLM costs explicitly to business events (like a Stripe checkout, a conversion, or custom tiers) without hardcoding any specific business model, use TraceContext or pass parameters directly:
 Option A — Using TraceContext for an execution scope (recommended for web requests / checkouts):

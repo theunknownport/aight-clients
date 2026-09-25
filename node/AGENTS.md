@@ -35,6 +35,9 @@ import { reportValue, VALUE_BY_FILE, pushValue } from 'aight-sdk'
 
 reportValue(49.0)
 await pushValue(VALUE_BY_FILE)
+For an agent the user runs but this project does not contain — Claude Code, Gemini, Codex, traced by aight's collectors — earnings go in by agent id, because there is no calling file of theirs to resolve. pushValue takes the map, so pass one:
+await pushValue({ 'claude-code': 49.0 })  // the agent id, not a source file
+It shows a reported figure in the Workspace like any other agent. It never shows a matched one — the matching engine excludes external rows from its time-window fallback — so do not try to give it one through pushEvent.
 Use this for value you can attribute to a file and want summed across a run — it lands in the agent's earned_usd. For a discrete event with its own id, value and timestamp (a checkout, a signup) that you want matched to the run that produced it, use pushEvent in step 7 instead: that reports into its own field, business_value_by_currency, not into earned_usd. Pick whichever shape you actually have; don't wire both for the same revenue just to be safe.
 7. Optional: Business events
 Report a business KPI/event so the Workspace can tie spend to what it earned. Again: only if this project has a real signal, never an invented number.

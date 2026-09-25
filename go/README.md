@@ -95,6 +95,27 @@ aight.PushValue("", "")
 acknowledged — so calling it every flush sends each earning once, and a failed
 push keeps the total for the retry instead of losing it.
 
+Reporting value for an agent you did **not** write — Claude Code, Gemini, Codex,
+which AIght collects rather than instruments — means posting it directly.
+`PushValue` flushes the accumulator `ReportValue` filled, and that is keyed by
+*your* calling file; an external agent has no file of yours to bind to, so it is
+addressed by its agent id instead:
+
+```go
+body := strings.NewReader(`[{"filepath":"claude-code","value_usd":49.0}]`)
+req, _ := http.NewRequest("POST", "https://api.aight.studio/api/ingest/value", body)
+req.Header.Set("Authorization", "Bearer "+os.Getenv("AIGHT_API_KEY"))
+req.Header.Set("Content-Type", "application/json")
+http.DefaultClient.Do(req) // check the error and the status in real code
+```
+
+The Workspace shows that on `claude-code` exactly as it shows an agent of your
+own: the earned total, the net, the ratio. What an external agent never gets is
+a **matched** figure — the matching engine's time-window fallback excludes
+external rows outright, because a collector pushes no timestamp and an external
+row would always be the newest thing in the window and win the guess by default.
+Reported, yes; guessed, no.
+
 ## Business events
 
 Report a business KPI — a checkout, a signup, a ticket closed — so the

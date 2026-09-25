@@ -92,6 +92,29 @@ Remote.pushValue(null, null);
 acknowledged — so calling it every flush sends each earning once, and a failed
 push keeps the total for the retry instead of losing it.
 
+Reporting value for an agent you did **not** write — Claude Code, Gemini, Codex,
+which AIght collects rather than instruments — means posting it directly.
+`pushValue` flushes the map `reportValue` filled, and that is keyed by *your*
+calling class; an external agent has no class of yours to bind to, so it is
+addressed by its agent id instead:
+
+```java
+var body = HttpRequest.BodyPublishers.ofString(
+        "[{\"filepath\":\"claude-code\",\"value_usd\":49.0}]");
+var req = HttpRequest.newBuilder(URI.create("https://api.aight.studio/api/ingest/value"))
+        .header("Authorization", "Bearer " + System.getenv("AIGHT_API_KEY"))
+        .header("Content-Type", "application/json")
+        .POST(body).build();
+HttpClient.newHttpClient().send(req, HttpResponse.BodyHandlers.discarding());
+```
+
+The Workspace shows that on `claude-code` exactly as it shows an agent of your
+own: the earned total, the net, the ratio. What an external agent never gets is
+a **matched** figure — the matching engine's time-window fallback excludes
+external rows outright, because a collector pushes no timestamp and an external
+row would always be the newest thing in the window and win the guess by default.
+Reported, yes; guessed, no.
+
 ## Trace ids and business events
 
 Give a run an explicit id, then report the outcome it produced with that same

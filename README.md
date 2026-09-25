@@ -26,7 +26,10 @@ Every SDK implements the same small surface:
 - **`pushValue(...)`** — sends everything recorded by `reportValue` to
   `POST /api/ingest/value`, same auth as `push`, and clears its accumulator on
   the same terms: only once the server has acknowledged, so a failed push
-  keeps the earnings for a retry.
+  keeps the earnings for a retry. Python and Node take the filepath → value map
+  as an argument, so they can report earnings against any agent by name
+  (`pushValue({"claude-code": 49.0})`); Go and Java push the accumulator
+  `reportValue` filled.
 - **`report()`** — a local, plain-text call-by-call summary, no network call.
   Useful for fully offline, local-only use without ever pushing anywhere.
 
@@ -127,6 +130,17 @@ the stack, so there is nothing to instrument. AIght reads the agent's own
 on-disk record instead, and those rows arrive as `kind: "external"`: frame 0
 is the agent id and frame 1 is the step it took (the tool and the file),
 because there is no source line to point at.
+
+**Earnings work the same way, and there they are reported rather than
+inferred.** An external agent's value goes in against its agent id — the same
+`POST /api/ingest/value` the SDKs use, with `{"filepath": "claude-code",
+"value_usd": 49.0}` — and the Workspace shows it on that agent exactly as it
+shows an internal agent's reported value: the earned total, the net, the ratio.
+What an external agent never gets is a *matched* figure. The matching engine's
+time-window fallback excludes external rows outright, because a collector pushes
+no timestamp and an external row would always be the newest thing in the window
+and win the guess by default. Reported, yes; guessed, no — the guess is the one
+number this product does not put on an agent nobody wrote.
 
 **Aider cannot backfill, and that is the one asymmetry.** Every other
 collector reads a record its agent kept by default. Aider writes a per-call
@@ -263,9 +277,17 @@ Authorization: Bearer <AIGHT_API_KEY>
 Content-Type: application/json
 
 [
-  { "filepath": "/app/agent.py", "value_usd": 42.50 }
+  { "filepath": "/app/agent.py", "value_usd": 42.50 },
+  { "filepath": "claude-code",   "value_usd": 49.00 }  # an external agent's id
 ]
 ```
+
+`filepath` is whatever the agent is called: a source file for an agent you
+wrote, the agent id a collector roots its rows at for one you only run. Every
+row here is a *report* — a number someone stated — and a report is shown for
+either kind of agent. What no row here can be is a *match*: this endpoint takes
+no `trace_id`, and the event endpoint that does will not hand an event to an
+external agent through its time-window fallback. See **Collectors** above.
 
 ```
 POST /api/ingest/events

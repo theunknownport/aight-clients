@@ -117,6 +117,20 @@ has accumulated and clears it once the server has acknowledged, so calling it
 every flush sends each earning once, and a failed push keeps the total for the
 retry instead of losing it.
 
+`pushValue` takes that map as an argument rather than reading a global, so it is
+also how you report value for an agent you did not write — Claude Code, Gemini,
+Codex — which is collected rather than instrumented:
+
+```js
+await pushValue({ 'claude-code': 49.0 }) // the agent id, not a source file
+```
+
+The Workspace shows that on `claude-code` exactly as it shows an agent of your
+own. What such an agent never gets is a **matched** figure: the matching
+engine's time-window fallback excludes external rows outright, because a
+collector pushes no timestamp and an external row would always be the newest
+thing in the window and win the guess by default. Reported, yes; guessed, no.
+
 If what you have is a discrete event rather than a running total, use
 `pushEvent` below — it reports into its own field and carries the match to the
 run that produced it.

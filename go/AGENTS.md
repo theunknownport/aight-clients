@@ -33,6 +33,8 @@ You should see the project's own file/line, not a framework's internal dispatch 
 Only call ReportValue if this project has a real, countable signal for what it earned — never invent or estimate a number:
 aight.ReportValue(49.0)
 err := aight.PushValue("", "")
+For an agent the user runs but this project does not contain — Claude Code, Gemini, Codex, traced by aight's collectors — post its earnings against the agent id instead. PushValue flushes what ReportValue accumulated, keyed by your calling file, and an external agent has no file of yours. POST /api/ingest/value with [{"filepath":"claude-code","value_usd":49.0}] and Authorization: Bearer $AIGHT_API_KEY does it; go/README.md has the snippet. Same rule — a real, countable amount, or nothing.
+Such an agent shows a reported figure in the Workspace like any other. It never shows a matched one: the matching engine excludes external rows from its time-window fallback, so do not try to give it one through PushEvent.
 7. Optional: Business events
 PushEvent reports a business KPI (a checkout, a signup, a ticket closed) so the Workspace can put it next to the spend that produced it. Only call it when this project has a real event with a real name — never invent one:
 _, err := aight.PushEvent("checkout.completed", 49.0, aight.EventOptions{})
