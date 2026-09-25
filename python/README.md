@@ -145,6 +145,19 @@ row per step the agent took, under an external agent called `claude-code`. Cost
 lands on the step — the tool it called and the file it touched — rather than on
 a source line, because no source line of yours is involved.
 
+Leave it running and the spend appears as you work, rather than whenever you
+next remember to run it:
+
+```bash
+aight-collect --watch              # re-scan every 30s, until Ctrl-C
+aight-collect --watch --interval 10
+```
+
+`--watch` cannot be combined with `--since` or `--all-time`. Those name a scope
+to re-send, and a loop would re-send it every interval — which the API *adds* to
+what it already holds, so the second tick would double the first. Run them once
+to catch up, then start the watcher.
+
 Three things are worth knowing before the first run:
 
 - **A plain run resumes.** It records the newest call it pushed for each

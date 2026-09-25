@@ -1,14 +1,18 @@
+import io
 import json
 import time
+import urllib.error
 from datetime import UTC, date, datetime, timedelta
 
-from aight.collect import claude_code as claude_code_collect
 import pytest
+
+from aight.collect import claude_code as claude_code_collect
 from aight.collect.claude_code import (
     _split_evenly,
     calls_from_transcript,
     main,
     parse_since,
+    pending,
     rows_for,
 )
 
@@ -502,3 +506,190 @@ def test_a_matching_key_pushes_and_names_where_it_went(tmp_path, monkeypatch, ca
         "id": "proj_1",
         "name": "My project",
     }
+
+
+# --- --watch: the loop that reports while the agent is still running --------
+
+def _stop_after(monkeypatch, ticks):
+    """Let `ticks` passes of the watch loop happen, then interrupt it the way
+    Ctrl-C does.
+
+    Patching sleep is what keeps the test instant — the loop's only wait is
+    there — and raising KeyboardInterrupt from it is the real path a person's
+    Ctrl-C takes, not a stand-in for one. The callback runs between ticks, so
+    a test can change the world the next scan sees.
+    """
+    calls = {"n": 0}
+
+    def sleep(_seconds):
+        calls["n"] += 1
+        if calls["n"] >= ticks:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(claude_code_collect.time, "sleep", sleep)
+    return calls
+
+
+def _http_error(code):
+    """An HTTPError shaped enough for the loop's handler, which reads the body
+    to put the server's own reason in the message."""
+    return urllib.error.HTTPError(
+        "https://example.invalid", code, "boom", {}, io.BytesIO(b"the server's reason")
+    )
+
+
+def test_watch_refuses_a_scope_it_would_re_send(tmp_path, capsys):
+    """The combination that costs money. --all-time on a loop re-sends the
+    whole history every interval and the API *adds* what it receives, so it is
+    permanent doubling with nothing to notice and stop — worse than a mistaken
+    one-shot run, which at least ends. Refused, not documented."""
+    for scope in (["--all-time"], ["--since", "2026-09-21"]):
+        with pytest.raises(SystemExit) as raised:
+            main(["--root", str(tmp_path), "--watch", *scope])
+        assert raised.value.code == 2
+        assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_watch_refuses_to_pair_with_dry_run(tmp_path, capsys):
+    """--dry-run prints and exits; --watch never exits. Together they would
+    reprint the same rows until the terminal was killed."""
+    (tmp_path / "t").mkdir()
+    _recent(tmp_path / "t")
+    with pytest.raises(SystemExit) as raised:
+        main(["--root", str(tmp_path / "t"), "--watch", "--dry-run"])
+    assert raised.value.code == 2
+    assert "forever" in capsys.readouterr().err
+
+
+def test_watch_pushes_calls_that_appear_after_it_started(tmp_path, monkeypatch, capsys):
+    """The whole point of the loop: a call written *while it is running* goes up
+    without anyone running anything again. The first scan sees one call and the
+    second sees two, and only the new one is sent — the resume boundary the
+    one-shot path uses is the same one this uses, so the calls already pushed
+    are not pushed twice."""
+    pushed = _recording_push(monkeypatch)
+    monkeypatch.setattr(
+        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+    )
+    root = tmp_path / "transcripts"
+    _recent(root)
+
+    def sleep(_seconds):
+        # Between tick 1 and tick 2 the session gets another call. Rewriting
+        # the file with both entries is what a real transcript looks like: the
+        # old call is still there, and the filter is per call, not per file.
+        if not slept:
+            slept.append(1)
+            now = datetime.now(UTC)
+            _write(root, [
+                _assistant("msg_1", [{"type": "tool_use", "name": "Edit",
+                                      "input": {"file_path": "a.py"}}],
+                           timestamp=(now - timedelta(minutes=1)).isoformat()),
+                _assistant("msg_2", [{"type": "tool_use", "name": "Edit",
+                                      "input": {"file_path": "b.py"}}],
+                           timestamp=now.isoformat()),
+            ])
+            return
+        raise KeyboardInterrupt
+
+    slept: list[int] = []
+    monkeypatch.setattr(claude_code_collect.time, "sleep", sleep)
+
+    assert main(["--root", str(root), "--watch"]) == 0
+    assert len(pushed) == 2, "expected one push per tick, not one per run"
+    # Tick 1 sends what was already on disk; tick 2 sends only the call that
+    # arrived since. a.py is older than the boundary tick 1 recorded, so it is
+    # in neither — which is the property under test.
+    assert [r["chain"][1]["filepath"] for r in pushed[0]] == ["new.py"]
+    assert [r["chain"][1]["filepath"] for r in pushed[1]] == ["b.py"]
+
+
+def test_watch_keeps_going_through_a_transient_failure(tmp_path, monkeypatch, capsys):
+    """A 503 is the server asking for patience. Everything already recorded is
+    still in the transcript, so the next tick sends it — stopping would be the
+    only actual mistake."""
+    attempts = {"n": 0}
+
+    def flaky(rows, key, url):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise _http_error(503)
+        return {"project": {"id": "p1", "name": "P"}}
+
+    monkeypatch.setenv("AIGHT_API_KEY", "test-key")
+    monkeypatch.setattr(claude_code_collect, "push", flaky)
+    monkeypatch.setattr(
+        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+    )
+    root = tmp_path / "transcripts"
+    _recent(root)
+    _stop_after(monkeypatch, ticks=2)
+
+    assert main(["--root", str(root), "--watch"]) == 0
+    assert attempts["n"] == 2, "the failed tick should have been retried"
+    assert "retrying" in capsys.readouterr().err
+
+
+def test_watch_stops_on_a_rejected_key(tmp_path, monkeypatch, capsys):
+    """A 401 will read the same in thirty seconds, and forever after. Repeating
+    it is noise; the useful thing is to stop and say so."""
+    monkeypatch.setenv("AIGHT_API_KEY", "test-key")
+    monkeypatch.setattr(
+        claude_code_collect, "push", lambda rows, key, url: (_ for _ in ()).throw(_http_error(401))
+    )
+    monkeypatch.setattr(
+        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+    )
+    root = tmp_path / "transcripts"
+    _recent(root)
+    sleeps = _stop_after(monkeypatch, ticks=99)  # never reached: it must stop first
+
+    assert main(["--root", str(root), "--watch"]) == 1
+    assert sleeps["n"] == 0, "a rejected key must not go round again"
+    assert "401" in capsys.readouterr().err
+
+
+def test_a_watch_run_with_nothing_to_push_still_starts(tmp_path, monkeypatch, capsys):
+    """"Nothing new to push" is a one-shot result, not a watch state — it is
+    what the loop looks like between ticks and before the first call of the day.
+    Returning there would make --watch exit immediately on a quiet machine."""
+    pushed = _recording_push(monkeypatch)
+    monkeypatch.setattr(
+        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+    )
+    root = tmp_path / "transcripts"
+    root.mkdir()
+    monkeypatch.setattr(claude_code_collect, "push", lambda rows, key, url: pushed.append(rows))
+    _stop_after(monkeypatch, ticks=1)
+
+    assert main(["--root", str(root), "--watch"]) == 0
+    assert pushed == [], "there was nothing to send"
+    assert "Watching" in capsys.readouterr().out
+
+
+# --- pending(): the boundary arithmetic both entry points share --------------
+
+def test_pending_falls_back_to_the_passed_scope_when_the_marker_is_unreadable(tmp_path):
+    """A run given --since against a marker it could not read carries None as
+    its coverage. The scope it was given has to decide every file — a bare
+    .get on that None fails on the attribute instead, which is a crash where
+    the documented behaviour is "use the scope you passed"."""
+    path = _recent(tmp_path)
+    calls, newest, fresh = pending(
+        [path], None, True, parse_since("2026-09-21T00:00:00Z")
+    )
+    assert len(calls) == 1
+    assert fresh == [], "a hand-passed scope leaves nothing needing a first-run window"
+    assert str(path.resolve()) in {str(k) for k in newest}
+
+
+def test_pending_reports_a_file_it_has_no_boundary_for(tmp_path):
+    """The caller has to be able to say "only the last day is going up" — that
+    is a different message from "nothing new", and only this function knows
+    which files are in the first case."""
+    path = _recent(tmp_path)
+    _, _, fresh = pending([path], {}, False, None)
+    assert fresh == [path]
+
+    _, _, fresh = pending([path], {str(path.resolve()): time.time()}, False, None)
+    assert fresh == []

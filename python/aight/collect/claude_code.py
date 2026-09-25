@@ -72,6 +72,12 @@ TRANSCRIPT_ROOT = Path.home() / ".claude" / "projects"
 # from. A day covers the sessions you might have just finished; everything
 # older was either already pushed or is --all-time's business.
 DEFAULT_WINDOW_SECONDS = 24 * 60 * 60
+# How often --watch re-scans. Short enough that a session's spend shows up while
+# you are still in it, long enough that a day of watching is ~2,880 scans and
+# not a busy loop. Each scan is a directory walk over files that are open for
+# writing anyway, so there is nothing to gain by going faster than a person can
+# read the output.
+DEFAULT_INTERVAL_SECONDS = 30
 MARKER_VERSION = 2
 # What each transcript file's last push covered — {version, files: {resolved
 # path: newest call time pushed}}. Per file, not per root: the same .jsonl
@@ -390,6 +396,46 @@ def whoami(api_key: str, url: str) -> dict | None:
         raise  # a 401 is a bad key, and wants to be loud
 
 
+def _check_destination(api_key: str, url: str) -> tuple[bool, dict | None]:
+    """Ask which project this key writes to, and refuse a key that moved.
+
+    Returns (may continue, where the key writes). The second is None both when
+    the server is too old to answer and when it answered without naming a
+    project, so the caller cannot use it to decide whether to stop — hence the
+    separate flag rather than a bare None meaning "carry on".
+
+    An ingest key is otherwise write-only: every read endpoint wants the Auth0
+    JWT, so a collector had no way to ask this before pushing. The marker
+    records that calls were *sent*, never where, so a key minted in another
+    project's Integrate tab would resume this machine's coverage, send only
+    what is newer than it into the wrong workspace, and leave the project that
+    was meant permanently missing that window — silently, because every one of
+    those pushes succeeds.
+    """
+    try:
+        destination = whoami(api_key, url)
+    except urllib.error.HTTPError as e:
+        print(f"Ingest rejected with {e.code}: {e.read().decode(errors='replace')}",
+              file=sys.stderr)
+        return False, None
+    except urllib.error.URLError as e:
+        print(f"Could not reach {url}: {e.reason}", file=sys.stderr)
+        return False, None
+
+    recorded = _marker_project()
+    if destination and recorded and destination["id"] != recorded["id"]:
+        print(
+            f"This key writes to {_label(destination)}, but {MARKER_PATH} records "
+            f"calls already sent to {_label(recorded)}.\n"
+            f"A plain run would skip those calls and push the rest to the wrong "
+            f"workspace. Use the key for {_label(recorded)}, or pass --since to "
+            f"scope a deliberate re-send.",
+            file=sys.stderr,
+        )
+        return False, None
+    return True, destination
+
+
 def _marker_project() -> dict | None:
     """The project this machine's marker recorded on its last successful push.
 
@@ -427,6 +473,127 @@ def push(rows: list[dict], api_key: str, url: str) -> dict:
         return {}
 
 
+def pending(
+    paths: list[Path], covered: dict[str, float] | None, manual: bool, since: float | None
+) -> tuple[list[Call], dict[Path, float], list[Path]]:
+    """What has not been pushed yet, across `paths`.
+
+    Returns the calls, the newest call time per file — which is the next run's
+    resume boundary — and the files that had nothing to resume from. The caller
+    reports the last of those, because "why is only the last day going up" is
+    worth saying and worth saying in different words to a one-shot run than to
+    a loop that will say it again in thirty seconds.
+
+    Each transcript is measured on its own: one file, one boundary, whichever
+    root found it and wherever the tool was run from. This is the part a watch
+    loop must not reimplement — the boundary arithmetic is what stands between
+    a re-run and permanently doubled spend, so there is one copy of it.
+    """
+    window = time.time() - DEFAULT_WINDOW_SECONDS
+    calls: list[Call] = []
+    newest_by_file: dict[Path, float] = {}
+    fresh: list[Path] = []
+    for path in paths:
+        key = path.resolve()
+        if manual:
+            file_since = since
+        # `covered is not None` rather than a bare .get: a run that passed
+        # --since against an unreadable marker carries None here, and would
+        # otherwise fail on the attribute rather than falling through to the
+        # scope it was given.
+        elif covered is not None and (entry := covered.get(str(key))) is not None:
+            file_since = entry
+        else:
+            # Nothing to resume this file from, so it starts at a day rather
+            # than at the beginning of time: pushes add up, and a full-history
+            # re-push doubles every figure already recorded for it.
+            file_since = window
+            fresh.append(path)
+        file_calls = calls_from_transcript(path, since=file_since)
+        calls += file_calls
+        # A run of nothing but undated calls has no boundary to record, and
+        # recording 0.0 would let the next run re-push the file.
+        newest = max((call.timestamp for call in file_calls), default=0.0)
+        if newest:
+            newest_by_file[key] = newest
+    return calls, newest_by_file, fresh
+
+
+def watch(
+    root: Path,
+    api_key: str,
+    url: str,
+    *,
+    covered: dict[str, float] | None,
+    destination: dict | None,
+    interval: float,
+) -> int:
+    """Collect on a loop, so spend is reported while the agent is still running.
+
+    One-shot collection only helps if you remember to run it. This is the
+    version you leave running: it re-scans `root` every `interval` seconds and
+    pushes whatever appeared since the last tick. New transcript files are
+    picked up as they are created, because the scan itself is repeated.
+
+    Two things are deliberately resolved once, by the caller, rather than per
+    tick. The marker, because re-reading a file this loop just wrote buys
+    nothing; and the key's destination, because a round trip every thirty
+    seconds is 2,880 requests a day to answer a question whose answer cannot
+    change while the process runs.
+
+    Every tick is a plain (resuming) collection — never a --since or --all-time
+    one. Those are one-shot scopes, and applying one on a loop would re-send the
+    same history every interval, which the API adds to what it holds. That is
+    why main() refuses to combine them with --watch rather than leaving it to
+    whoever reads the help text.
+
+    A tick that fails does not end the loop. A dropped connection, a 500, a rate
+    limit — the calls are still in the transcript and the next tick sends them,
+    so stopping would be the only real mistake. A rejection that will not fix
+    itself does end it, because repeating a rejected key every thirty seconds is
+    noise rather than resilience.
+    """
+    while True:
+        try:
+            calls, newest_by_file, fresh = pending(collect(root), covered, False, None)
+            if fresh:
+                print(f"{len(fresh)} transcript(s) with nothing pushed yet, so only calls "
+                      f"from the last {DEFAULT_WINDOW_SECONDS // 3600}h go up. "
+                      f"Pass --all-time once to catch them up.")
+            rows = rows_for(calls)
+            if rows:
+                result = push(rows, api_key, url) or {}
+                if covered is not None:
+                    _remember_covered(
+                        newest_by_file, covered, destination or result.get("project")
+                    )
+                landed = result.get("project") or destination
+                stamp = datetime.now(UTC).strftime("%H:%M:%S")
+                print(f"[{stamp}] Pushed {len(rows)} rows to {_label(landed)}"
+                      if landed else f"[{stamp}] Pushed {len(rows)} rows")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            # 429 and 5xx are the server asking for patience; everything else in
+            # the 4xx range is this client being wrong, and no amount of waiting
+            # fixes a key that was revoked or a project that was deleted.
+            if e.code != 429 and e.code < 500:
+                print(f"Ingest rejected with {e.code}: {body}", file=sys.stderr)
+                return 1
+            print(f"Ingest failed with {e.code}: {body} — retrying in {interval:.0f}s",
+                  file=sys.stderr)
+        except urllib.error.URLError as e:
+            print(f"Could not reach {url}: {e.reason} — retrying in {interval:.0f}s",
+                  file=sys.stderr)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            return 0
+        try:
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Not description=__doc__: that was right when this was a script you ran
     # from a checkout, but `aight-collect --help` is now the first thing a
@@ -449,11 +616,39 @@ def main(argv: list[str] | None = None) -> int:
                             "so running it again over an already-pushed directory doubles it")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the rows instead of pushing them")
+    parser.add_argument("--watch", action="store_true",
+                        help="keep running: re-scan and push on an interval, until interrupted")
+    parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SECONDS,
+                        metavar="SECONDS",
+                        help=f"seconds between scans with --watch "
+                             f"(default: {DEFAULT_INTERVAL_SECONDS})")
     args = parser.parse_args(argv)
+
+    # --since/--all-time scope every file by hand; a plain run resumes.
+    manual = args.all_time or bool(args.since)
+
+    # Both guards protect the same thing, and both sit before any I/O: a
+    # combination that cannot be honoured should be refused on the command line,
+    # not after a directory walk has already run. The API *adds* what it
+    # receives, so a scope that re-sends is fine once and ruinous on a loop —
+    # --all-time every thirty seconds would re-send the entire history every
+    # tick, and unlike a mistaken one-shot run there is nothing to notice and
+    # stop. It would keep doubling until someone read the workspace.
+    if args.watch and manual:
+        parser.error("--watch cannot be combined with --since or --all-time: those "
+                     "name a scope to re-send, and a loop would re-send it every "
+                     "interval. Run them once to catch up, then start the watcher.")
+    if args.watch and args.dry_run:
+        parser.error("--watch with --dry-run would print the same rows forever. "
+                     "Pick one.")
 
     root = args.root or (TRANSCRIPT_ROOT if args.all_projects else _transcript_dir(Path.cwd()))
     paths = collect(root)
-    if not paths:
+    # A watch run may legitimately start before there is anything to watch —
+    # that is what starting it early means, and the loop re-scans anyway. A
+    # --root that is not a directory at all is a different thing: a typo, and a
+    # loop over nothing would hide it instead of reporting it.
+    if not paths and not (args.watch and root.is_dir()):
         print(f"No transcripts under {root}", file=sys.stderr)
         return 1
 
@@ -463,8 +658,6 @@ def main(argv: list[str] | None = None) -> int:
         since = parse_since(args.since)
     else:
         since = None  # decided per file below
-    # --since/--all-time scope every file by hand; a plain run resumes.
-    manual = args.all_time or bool(args.since)
 
     # Each transcript is measured on its own: one file, one boundary, whichever
     # root found it and wherever the tool was run from.
@@ -485,29 +678,38 @@ def main(argv: list[str] | None = None) -> int:
               f"untouched. Delete it when you want a plain run to resume.",
               file=sys.stderr)
         covered = None
+
+    # A watch run branches here, before the scan below, so it does not pay for a
+    # collection nobody reads and then immediately repeat it. It resolves its own
+    # key and destination, once, and hands them to the loop.
+    #
+    # These six lines are duplicated from the one-shot path rather than shared
+    # with it, and the reason is that path's "nothing new to push" exit: it has
+    # to be reachable *without* touching the network, because a quiet machine
+    # with no key exits 0 today. Hoisting this above that check to save the
+    # duplication would turn a no-op run into a failure.
+    if args.watch:
+        api_key = os.environ.get("AIGHT_API_KEY")
+        if not api_key:
+            print("Set AIGHT_API_KEY (Integrate tab of your AIght Workspace)", file=sys.stderr)
+            return 1
+        url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
+        ok, destination = _check_destination(api_key, url)
+        if not ok:
+            return 1
+        print(f"Watching {root} every {args.interval:.0f}s — Ctrl-C to stop.")
+        return watch(
+            root, api_key, url,
+            covered=covered,
+            # The marker's own record is the fallback for a server too old to
+            # answer /whoami: it is where the last push from this machine went,
+            # which is the best available answer to where the next one should.
+            destination=destination or _marker_project(),
+            interval=args.interval,
+        )
+
     window = time.time() - DEFAULT_WINDOW_SECONDS
-    calls: list[Call] = []
-    newest_by_file: dict[Path, float] = {}
-    fresh: list[Path] = []
-    for path in paths:
-        key = path.resolve()
-        if manual:
-            file_since = since
-        elif (entry := covered.get(str(key))) is not None:
-            file_since = entry
-        else:
-            # Nothing to resume this file from, so it starts at a day rather
-            # than at the beginning of time: pushes add up, and a full-history
-            # re-push doubles every figure already recorded for it.
-            file_since = window
-            fresh.append(path)
-        file_calls = calls_from_transcript(path, since=file_since)
-        calls += file_calls
-        # A run of nothing but undated calls has no boundary to record, and
-        # recording 0.0 would let the next run re-push the file.
-        newest = max((call.timestamp for call in file_calls), default=0.0)
-        if newest:
-            newest_by_file[key] = newest
+    calls, newest_by_file, fresh = pending(paths, covered, manual, since)
 
     if fresh:
         print(f"{len(fresh)} transcript(s) with nothing pushed yet, so only calls "
@@ -534,34 +736,8 @@ def main(argv: list[str] | None = None) -> int:
     url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
 
     # Which project this key writes to, asked before anything is written.
-    #
-    # The marker records that calls were *sent*, never where. So a key minted in
-    # the wrong project's Integrate tab resumes this machine's coverage, pushes
-    # only what is newer than it into the wrong workspace, and leaves the
-    # project that was meant permanently missing that window — silently, since
-    # every one of those pushes succeeds. Refusing is the only safe direction;
-    # the ways forward are the key that matches the marker, or --since to scope
-    # a deliberate re-send into the project actually intended.
-    try:
-        destination = whoami(api_key, url)
-    except urllib.error.HTTPError as e:
-        print(f"Ingest rejected with {e.code}: {e.read().decode(errors='replace')}",
-              file=sys.stderr)
-        return 1
-    except urllib.error.URLError as e:
-        print(f"Could not reach {url}: {e.reason}", file=sys.stderr)
-        return 1
-
-    recorded = _marker_project()
-    if destination and recorded and destination["id"] != recorded["id"]:
-        print(
-            f"This key writes to {_label(destination)}, but {MARKER_PATH} records "
-            f"calls already sent to {_label(recorded)}.\n"
-            f"A plain run would skip those calls and push the rest to the wrong "
-            f"workspace. Use the key for {_label(recorded)}, or pass --since to "
-            f"scope a deliberate re-send.",
-            file=sys.stderr,
-        )
+    ok, destination = _check_destination(api_key, url)
+    if not ok:
         return 1
 
     try:
