@@ -23,4 +23,4 @@ Or trace manually, call by call:
     push(COST_PROCESSOR.buckets)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

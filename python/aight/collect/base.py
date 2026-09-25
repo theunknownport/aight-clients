@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .. import __version__ as SDK_VERSION
+
 DEFAULT_INGEST_URL = "https://api.aight.studio/api/ingest/spans"
 # How far back the very first run reaches, before there is anything to resume
 # from. A day covers the sessions you might have just finished; everything
@@ -343,7 +345,11 @@ def push(rows: list[dict], api_key: str, url: str, language: str) -> dict:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "X-Aight-Sdk-Language": language,
-            "X-Aight-Sdk-Version": "0.1.0",
+            # Read from the package rather than written here. This was a third
+            # copy of the version number, and a header that disagrees with the
+            # installed distribution is worse than no header: it makes the
+            # project's SDK badge claim a release the rows did not come from.
+            "X-Aight-Sdk-Version": SDK_VERSION,
         },
     )
     with urllib.request.urlopen(request, timeout=30) as response:

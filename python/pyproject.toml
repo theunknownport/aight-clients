@@ -1,6 +1,6 @@
 [project]
 name = "aight"
-version = "0.1.0"
+version = "0.2.0"
 description = "Attribute LLM spend to the exact source line, and push it to the AIght Workspace at aight.studio."
 # SPDX identifier; the text it refers to is the LICENSE file in this directory.
 # The bare string is PEP 639, which is why the build floor below is setuptools

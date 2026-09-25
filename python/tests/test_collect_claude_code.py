@@ -697,3 +697,43 @@ def test_pending_reports_a_file_it_has_no_boundary_for(tmp_path):
 
     _, _, fresh = pending(config, [path], {str(path.resolve()): time.time()}, False, None)
     assert fresh == []
+
+
+def test_push_builds_a_request_that_reports_the_installed_version(monkeypatch):
+    """The one test here that reaches inside push().
+
+    Every other test in this module patches push out, so its body never runs —
+    which means a header naming a variable that does not exist, or a version
+    written as a literal that has drifted from the package, passes the whole
+    suite and fails on the first real push. That is not hypothetical: it
+    happened while the version was being moved from a hardcoded string to the
+    package's own, and the suite stayed green through it.
+
+    No network — `urlopen` is replaced, which is also the only way to see the
+    request that was actually built rather than the one we hoped for.
+    """
+    from aight.collect import base
+
+    seen = {}
+
+    class _Response:
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        # urllib title-cases header names on the way out, so compare lowered.
+        seen["headers"] = {k.lower(): v for k, v in request.headers.items()}
+        return _Response()
+
+    monkeypatch.setattr(base.urllib.request, "urlopen", fake_urlopen)
+    base.push([{"chain": []}], "key", "https://example.invalid", language="a-collector")
+
+    assert seen["headers"]["x-aight-sdk-version"] == base.SDK_VERSION
+    assert seen["headers"]["x-aight-sdk-language"] == "a-collector"
+    assert seen["headers"]["authorization"] == "Bearer key"
