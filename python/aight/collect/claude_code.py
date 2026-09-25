@@ -450,7 +450,14 @@ def _marker_project() -> dict | None:
     return project if isinstance(project, dict) and project.get("id") else None
 
 
-def push(rows: list[dict], api_key: str, url: str) -> dict:
+def push(rows: list[dict], api_key: str, url: str, language: str = "claude-code") -> dict:
+    """POST rows to the ingest endpoint.
+
+    `language` names the collector in the badge the project shows, and is a
+    parameter rather than a constant because the proxy sends rows too — the
+    wire call is identical and only the label differs, so there is one copy of
+    it here rather than a second one that drifts.
+    """
     request = urllib.request.Request(
         url,
         data=json.dumps(rows).encode(),
@@ -458,7 +465,7 @@ def push(rows: list[dict], api_key: str, url: str) -> dict:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-            "X-Aight-Sdk-Language": "claude-code",
+            "X-Aight-Sdk-Language": language,
             "X-Aight-Sdk-Version": "0.1.0",
         },
     )

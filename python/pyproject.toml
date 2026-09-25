@@ -19,10 +19,11 @@ openai = ["opentelemetry-instrumentation-openai>=0.30.0"]
 anthropic = ["opentelemetry-instrumentation-anthropic>=0.30.0"]
 
 [project.scripts]
-# The Claude Code collector, installed alongside the SDK rather than kept as a
-# script in a repo the customer would have to clone. This package is otherwise
-# a library you import; this is the one thing you run.
+# The collectors, installed alongside the SDK rather than kept as scripts in a
+# repo the customer would have to clone. This package is otherwise a library
+# you import; these are the things you run.
 aight-collect = "aight.collect.claude_code:cli"
+aight-proxy = "aight.collect.proxy:cli"
 
 [project.urls]
 Homepage = "https://aight.studio"

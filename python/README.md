@@ -180,6 +180,49 @@ Without installing anything:
 uvx --from aight aight-collect --dry-run
 ```
 
+## Any other agent (the proxy)
+
+The collector above reads Claude Code's own transcripts, which means one parser
+per agent — and several agents keep no readable per-call record at all. Cursor
+keeps no token counts on disk; Amp emits no model name anywhere. So for those
+there is nothing to parse, and the answer is not another parser.
+
+`aight-proxy` stands between the agent and the API instead. It sees the request
+and the response, so it does not need to know what the agent is:
+
+```bash
+aight-proxy                                  # 127.0.0.1:8787
+export OPENAI_BASE_URL=http://127.0.0.1:8787/openai
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic
+```
+
+The path prefix picks the upstream, because both APIs live under `/v1/` and
+`/v1/messages` would otherwise be ambiguous. Everything after the prefix is
+forwarded unchanged, including your `Authorization` header — the proxy holds no
+credentials of its own and stores nothing from the request or the response.
+
+It works for anything that lets you point its base URL somewhere else, which is
+most agents. Name them so several through one proxy stay distinct:
+
+```bash
+AIGHT_PROXY_AGENT=codex aight-proxy
+```
+
+Four things worth knowing:
+
+- **It measures latency**, which the SDKs cannot. They record after the call
+  returns, so a duration taken there would time the recording; the proxy sits
+  around the call, so `latency_ms` is real.
+- **OpenAI's cached tokens are subtracted.** `prompt_tokens` counts the cached
+  prefix and AIght's `input_tokens` does not, so sending the inclusive number
+  would bill those tokens twice — permanently, since cost is frozen at receive
+  time. Anthropic reports the split itself and nothing is subtracted there.
+- **Streaming OpenAI requests get `stream_options.include_usage` added.** That
+  is a change to your request, not a passive read: without it a streaming call
+  carries no usage at all, and most calls stream. Anthropic needs no equivalent.
+- **Nothing is priced here.** Rows go up with `cost_usd` 0.0 and the platform
+  prices them from its own table at receive time.
+
 ## Example
 
 `examples/langgraph_spike.py` traces a 3-node LangGraph agent and prints the
