@@ -180,6 +180,28 @@ Without installing anything:
 uvx --from aight aight-collect --dry-run
 ```
 
+The same machinery covers three more agents, each as its own command:
+
+| Command | Reads | Needs |
+|---|---|---|
+| `aight-collect` | Claude Code — `~/.claude/projects` | nothing |
+| `aight-collect-codex` | Codex CLI — `~/.codex/sessions` (`CODEX_HOME` respected) | nothing |
+| `aight-collect-gemini` | Gemini CLI — `~/.gemini/tmp` | nothing |
+| `aight-collect-aider` | Aider's `--analytics-log` file | **you must pass the path** |
+
+Everything above applies to all four — the resume marker, `--since`/`--all-time`,
+`--watch`, and the destination check — because they share one implementation of
+it rather than one copy each.
+
+Aider is the odd one and the command says so when it has nothing to read: it
+writes a per-call log **only** if it was started with `--analytics-log FILE`,
+and there is no default location. A session that already ran without that flag
+cannot be collected, because Aider recorded nothing for it. Start Aider with
+the flag, then point this at the same file.
+
+The proxy below is the fallback for an agent none of these cover — including
+the ones whose records are not readable at all.
+
 ## Any other agent (the proxy)
 
 The collector above reads Claude Code's own transcripts, which means one parser

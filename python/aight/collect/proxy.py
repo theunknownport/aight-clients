@@ -55,7 +55,7 @@ import time
 import urllib.error
 from datetime import UTC, datetime
 
-from .claude_code import DEFAULT_INGEST_URL, push
+from .base import DEFAULT_INGEST_URL, push
 
 UPSTREAMS = {
     "openai": "api.openai.com",

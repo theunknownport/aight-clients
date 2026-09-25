@@ -23,6 +23,9 @@ anthropic = ["opentelemetry-instrumentation-anthropic>=0.30.0"]
 # repo the customer would have to clone. This package is otherwise a library
 # you import; these are the things you run.
 aight-collect = "aight.collect.claude_code:cli"
+aight-collect-codex = "aight.collect.codex:cli"
+aight-collect-gemini = "aight.collect.gemini:cli"
+aight-collect-aider = "aight.collect.aider:cli"
 aight-proxy = "aight.collect.proxy:cli"
 
 [project.urls]

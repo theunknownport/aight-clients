@@ -6,15 +6,16 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+# The collector is now a parser (claude_code) plus the machinery every
+# collector shares (base). What this file patches therefore depends on which
+# side of that line it sits on: `push`, `whoami` and `time.sleep` belong to the
+# shared module, and patching a name onto the parser module instead would leave
+# these tests calling the real network — or silently passing because a stub the
+# run never consults looks exactly like a stub that did its job.
+from aight.collect import base as collector
 from aight.collect import claude_code as claude_code_collect
-from aight.collect.claude_code import (
-    _split_evenly,
-    calls_from_transcript,
-    main,
-    parse_since,
-    pending,
-    rows_for,
-)
+from aight.collect.base import _split_evenly, parse_since, pending
+from aight.collect.claude_code import calls_from_transcript, main, rows_for
 
 # Read at import, before any fixture patches it: the marker path the module
 # really ships with, which is what tells a run from one directory from a run
@@ -216,7 +217,8 @@ def test_the_default_run_does_not_repush_history(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AIGHT_API_KEY", "test-key")
     monkeypatch.setattr(claude_code_collect, "MARKER_PATH", tmp_path / "marker.json")
     pushed: list[list[dict]] = []
-    monkeypatch.setattr(claude_code_collect, "push", lambda rows, key, url: pushed.append(rows))
+    monkeypatch.setattr(collector, "push",
+                        lambda rows, key, url, language: pushed.append(rows))
 
     now = datetime.now(UTC)
     _write(tmp_path, [
@@ -279,15 +281,14 @@ def _no_network(monkeypatch):
     here that does not ask for something else means to exercise. The two tests
     that do want the check patch `whoami` in their own bodies, which lands
     after this and wins."""
-    monkeypatch.setattr(claude_code_collect, "whoami", lambda key, url: None)
+    monkeypatch.setattr(collector, "whoami", lambda key, url: None)
 
 
 def _recording_push(monkeypatch):
-    from aight.collect import claude_code as claude_code_collect
-
     monkeypatch.setenv("AIGHT_API_KEY", "test-key")
     pushed: list[list[dict]] = []
-    monkeypatch.setattr(claude_code_collect, "push", lambda rows, key, url: pushed.append(rows))
+    monkeypatch.setattr(collector, "push",
+                        lambda rows, key, url, language: pushed.append(rows))
     return pushed
 
 
@@ -472,7 +473,7 @@ def test_a_key_for_another_project_refuses_instead_of_resuming(tmp_path, monkeyp
     """
     pushed = _recording_push(monkeypatch)
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "proj_other", "name": "Someone else's"}
+        collector, "whoami", lambda key, url: {"id": "proj_other", "name": "Someone else's"}
     )
     (tmp_path / "base").mkdir()
     _recent(tmp_path / "base")
@@ -493,7 +494,7 @@ def test_a_matching_key_pushes_and_names_where_it_went(tmp_path, monkeypatch, ca
     key change instead of resuming against the wrong one."""
     pushed = _recording_push(monkeypatch)
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "proj_1", "name": "My project"}
+        collector, "whoami", lambda key, url: {"id": "proj_1", "name": "My project"}
     )
     (tmp_path / "base").mkdir()
     _recent(tmp_path / "base")
@@ -526,7 +527,7 @@ def _stop_after(monkeypatch, ticks):
         if calls["n"] >= ticks:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(claude_code_collect.time, "sleep", sleep)
+    monkeypatch.setattr(collector.time, "sleep", sleep)
     return calls
 
 
@@ -569,7 +570,7 @@ def test_watch_pushes_calls_that_appear_after_it_started(tmp_path, monkeypatch, 
     are not pushed twice."""
     pushed = _recording_push(monkeypatch)
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+        collector, "whoami", lambda key, url: {"id": "p1", "name": "P"}
     )
     root = tmp_path / "transcripts"
     _recent(root)
@@ -593,7 +594,7 @@ def test_watch_pushes_calls_that_appear_after_it_started(tmp_path, monkeypatch, 
         raise KeyboardInterrupt
 
     slept: list[int] = []
-    monkeypatch.setattr(claude_code_collect.time, "sleep", sleep)
+    monkeypatch.setattr(collector.time, "sleep", sleep)
 
     assert main(["--root", str(root), "--watch"]) == 0
     assert len(pushed) == 2, "expected one push per tick, not one per run"
@@ -610,16 +611,16 @@ def test_watch_keeps_going_through_a_transient_failure(tmp_path, monkeypatch, ca
     only actual mistake."""
     attempts = {"n": 0}
 
-    def flaky(rows, key, url):
+    def flaky(rows, key, url, language):
         attempts["n"] += 1
         if attempts["n"] == 1:
             raise _http_error(503)
         return {"project": {"id": "p1", "name": "P"}}
 
     monkeypatch.setenv("AIGHT_API_KEY", "test-key")
-    monkeypatch.setattr(claude_code_collect, "push", flaky)
+    monkeypatch.setattr(collector, "push", flaky)
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+        collector, "whoami", lambda key, url: {"id": "p1", "name": "P"}
     )
     root = tmp_path / "transcripts"
     _recent(root)
@@ -635,10 +636,11 @@ def test_watch_stops_on_a_rejected_key(tmp_path, monkeypatch, capsys):
     it is noise; the useful thing is to stop and say so."""
     monkeypatch.setenv("AIGHT_API_KEY", "test-key")
     monkeypatch.setattr(
-        claude_code_collect, "push", lambda rows, key, url: (_ for _ in ()).throw(_http_error(401))
+        collector, "push",
+        lambda rows, key, url, language: (_ for _ in ()).throw(_http_error(401))
     )
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+        collector, "whoami", lambda key, url: {"id": "p1", "name": "P"}
     )
     root = tmp_path / "transcripts"
     _recent(root)
@@ -655,11 +657,12 @@ def test_a_watch_run_with_nothing_to_push_still_starts(tmp_path, monkeypatch, ca
     Returning there would make --watch exit immediately on a quiet machine."""
     pushed = _recording_push(monkeypatch)
     monkeypatch.setattr(
-        claude_code_collect, "whoami", lambda key, url: {"id": "p1", "name": "P"}
+        collector, "whoami", lambda key, url: {"id": "p1", "name": "P"}
     )
     root = tmp_path / "transcripts"
     root.mkdir()
-    monkeypatch.setattr(claude_code_collect, "push", lambda rows, key, url: pushed.append(rows))
+    monkeypatch.setattr(collector, "push",
+                        lambda rows, key, url, language: pushed.append(rows))
     _stop_after(monkeypatch, ticks=1)
 
     assert main(["--root", str(root), "--watch"]) == 0
@@ -676,7 +679,7 @@ def test_pending_falls_back_to_the_passed_scope_when_the_marker_is_unreadable(tm
     the documented behaviour is "use the scope you passed"."""
     path = _recent(tmp_path)
     calls, newest, fresh = pending(
-        [path], None, True, parse_since("2026-09-21T00:00:00Z")
+        claude_code_collect._config(), [path], None, True, parse_since("2026-09-21T00:00:00Z")
     )
     assert len(calls) == 1
     assert fresh == [], "a hand-passed scope leaves nothing needing a first-run window"
@@ -688,8 +691,9 @@ def test_pending_reports_a_file_it_has_no_boundary_for(tmp_path):
     is a different message from "nothing new", and only this function knows
     which files are in the first case."""
     path = _recent(tmp_path)
-    _, _, fresh = pending([path], {}, False, None)
+    config = claude_code_collect._config()
+    _, _, fresh = pending(config, [path], {}, False, None)
     assert fresh == [path]
 
-    _, _, fresh = pending([path], {str(path.resolve()): time.time()}, False, None)
+    _, _, fresh = pending(config, [path], {str(path.resolve()): time.time()}, False, None)
     assert fresh == []

@@ -51,7 +51,7 @@ repo; Java is built from a clone. Each README below has the exact commands.
 
 | Language | Path | Install |
 |---|---|---|
-| Python | [`python/`](python/) | `pip install aight` — also installs the `aight-collect` and `aight-proxy` commands |
+| Python | [`python/`](python/) | `pip install aight` — also installs the `aight-collect*` and `aight-proxy` commands |
 | Node.js | [`node/`](node/) | `npm install aight-sdk` |
 | Go | [`go/`](go/) | `go get github.com/theunknownport/aight-clients/go` |
 | Java | [`java/`](java/) | `mvn install` from a clone — not yet on Maven Central |
