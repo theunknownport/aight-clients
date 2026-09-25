@@ -15,9 +15,10 @@ time. `traced_llm_call` therefore returns `None`, not a cost.
 pip install aight
 ```
 
-That is the whole install, and it also puts `aight-collect` on your path — the
-Claude Code collector, which is a separate thing from the SDK and is described
-under [External agents](#external-agents-claude-code) below.
+That is the whole install, and it also puts the collectors on your path — 
+`aight-collect` for Claude Code, three more for other agents, and `aight-proxy`
+for anything none of them can read. They are a separate thing from the SDK and
+are described under [External agents](#external-agents) below.
 
 ## Deploy with your AI coding agent
 
@@ -124,7 +125,7 @@ platform's, so spend only appears in the AIght Workspace once you push.
 examples/snippet_check.py:19 (plan_step) [gpt-4o-mini] = 3 call(s), 540 in / 180 out
 ```
 
-## External agents (Claude Code)
+## External agents
 
 Everything above is for an agent *you wrote*: the SDK walks your call stack to
 find the line that issued the call. An agent you run but did not write has no
