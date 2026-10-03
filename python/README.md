@@ -45,7 +45,7 @@ traced_llm_call("gpt-4o-mini", input_tokens=180, output_tokens=60)
 push(COST_PROCESSOR.buckets)  # reads AIGHT_API_KEY from the environment
 ```
 
-Get an API key from the Integrate tab of your AIght Workspace, then:
+Get an API key from Project settings in your AIght Workspace, then:
 
 ```bash
 export AIGHT_API_KEY="aight_..."
@@ -194,8 +194,8 @@ Three things are worth knowing before the first run:
   been pushed.
 - **The key alone decides the destination.** A run prints the project its rows
   landed in and stops rather than resuming when that differs from the project
-  its earlier pushes went to. A key copied out of another project's Integrate
-  tab otherwise reads exactly like success, and fills a workspace nobody is
+  its earlier pushes went to. A key copied out of another project's settings
+  otherwise reads exactly like success, and fills a workspace nobody is
   looking at.
 
 Without installing anything:

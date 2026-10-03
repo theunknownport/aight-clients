@@ -33,7 +33,7 @@ public final class Remote {
         String key = apiKey != null ? apiKey : System.getenv("AIGHT_API_KEY");
         if (key == null || key.isEmpty()) {
             throw new IllegalStateException(
-                    "No API key. Pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard).");
+                    "No API key. Pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio).");
         }
         String endpoint = url != null ? url : System.getenv().getOrDefault("AIGHT_INGEST_URL", DEFAULT_INGEST_URL);
 
@@ -135,7 +135,7 @@ public final class Remote {
         String key = apiKey != null ? apiKey : System.getenv("AIGHT_API_KEY");
         if (key == null || key.isEmpty()) {
             throw new IllegalStateException(
-                    "No API key. Pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard).");
+                    "No API key. Pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio).");
         }
         String endpoint = url != null
                 ? url
@@ -198,7 +198,7 @@ public final class Remote {
         String key = o.apiKey() != null ? o.apiKey() : System.getenv("AIGHT_API_KEY");
         if (key == null || key.isEmpty()) {
             throw new IllegalStateException(
-                    "No API key. Pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard).");
+                    "No API key. Pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio).");
         }
 
         // A single object, not an array — /api/ingest/events is the one ingest

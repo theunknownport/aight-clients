@@ -14,7 +14,7 @@ function requireKey(apiKey) {
   const key = apiKey || process.env.AIGHT_API_KEY
   if (!key) {
     throw new Error(
-      'No API key. Pass { apiKey }, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard).'
+      'No API key. Pass { apiKey }, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio).'
     )
   }
   return key

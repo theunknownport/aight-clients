@@ -77,7 +77,7 @@ func Push(p *CostByLineProcessor, apiKey, url string) error {
 		apiKey = os.Getenv("AIGHT_API_KEY")
 	}
 	if apiKey == "" {
-		return fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard)")
+		return fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio)")
 	}
 	if url == "" {
 		url = os.Getenv("AIGHT_INGEST_URL")
@@ -156,7 +156,7 @@ func PushValue(apiKey, url string) error {
 		apiKey = os.Getenv("AIGHT_API_KEY")
 	}
 	if apiKey == "" {
-		return fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard)")
+		return fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio)")
 	}
 	if url == "" {
 		url = os.Getenv("AIGHT_VALUE_INGEST_URL")
@@ -245,7 +245,7 @@ func PushEvent(eventName string, value float64, opts EventOptions) (map[string]a
 		apiKey = os.Getenv("AIGHT_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from the Integrate tab of your aight.studio dashboard)")
+		return nil, fmt.Errorf("no API key: pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio)")
 	}
 	url := opts.URL
 	if url == "" {

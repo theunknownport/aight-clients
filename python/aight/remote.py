@@ -1,8 +1,8 @@
 """Push locally-traced spend data to your hosted AIght Workspace.
 
 Stdlib only (urllib) — reporting cost data home shouldn't require pulling in
-`requests` on top of the tracing deps. Get an API key from the "Integrate"
-tab of your AIght Workspace, then after a traced run:
+`requests` on top of the tracing deps. Get an API key from Project settings
+in your AIght Workspace, then after a traced run:
 
     from aight.remote import push
     from aight.tracing import COST_PROCESSOR
@@ -68,7 +68,7 @@ def push(buckets, api_key: str | None = None, url: str | None = None) -> None:
     if not api_key:
         raise RuntimeError(
             "No API key. Pass api_key=..., or set AIGHT_API_KEY (get one from "
-            "the Integrate tab of your aight.studio dashboard)."
+            "Project settings in your AIght Workspace at aight.studio)."
         )
     url = url or os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
     rows = [
@@ -141,7 +141,7 @@ def push_event(
     if not api_key:
         raise RuntimeError(
             "No API key. Pass api_key=..., or set AIGHT_API_KEY (get one from "
-            "the Integrate tab of your aight.studio dashboard)."
+            "Project settings in your AIght Workspace at aight.studio)."
         )
     url = url or os.environ.get("AIGHT_EVENTS_INGEST_URL", DEFAULT_INGEST_URL.replace("/spans", "/events"))
     event = {
@@ -173,7 +173,7 @@ def push_value(value_by_file, api_key: str | None = None, url: str | None = None
     if not api_key:
         raise RuntimeError(
             "No API key. Pass api_key=..., or set AIGHT_API_KEY (get one from "
-            "the Integrate tab of your aight.studio dashboard)."
+            "Project settings in your AIght Workspace at aight.studio)."
         )
     url = url or os.environ.get("AIGHT_VALUE_INGEST_URL", DEFAULT_INGEST_URL.replace("/spans", "/value"))
     rows = [{"filepath": filepath, "value_usd": value} for filepath, value in value_by_file.items()]

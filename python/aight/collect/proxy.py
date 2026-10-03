@@ -434,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
 
     api_key = os.environ.get("AIGHT_API_KEY")
     if not api_key:
-        print("Set AIGHT_API_KEY (Integrate tab of your AIght Workspace)", file=sys.stderr)
+        print("Set AIGHT_API_KEY (Project settings in your AIght Workspace)", file=sys.stderr)
         return 1
     ingest_url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
     return serve(args.host, args.port, api_key, ingest_url, args.agent)

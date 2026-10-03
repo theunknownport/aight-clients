@@ -284,7 +284,7 @@ def _check_destination(config: Collector, api_key: str, url: str) -> tuple[bool,
     An ingest key is otherwise write-only: every read endpoint wants the Auth0
     JWT, so a collector had no way to ask this before pushing. The marker
     records that calls were *sent*, never where, so a key minted in another
-    project's Integrate tab would resume this machine's coverage, send only
+    project's settings would resume this machine's coverage, send only
     what is newer than it into the wrong workspace, and leave the project that
     was meant permanently missing that window — silently, because every one of
     those pushes succeeds.
@@ -689,7 +689,7 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
     if args.watch:
         api_key = os.environ.get("AIGHT_API_KEY")
         if not api_key:
-            print("Set AIGHT_API_KEY (Integrate tab of your AIght Workspace)", file=sys.stderr)
+            print("Set AIGHT_API_KEY (Project settings in your AIght Workspace)", file=sys.stderr)
             return 1
         url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
         ok, destination = _check_destination(config, api_key, url)
@@ -729,7 +729,7 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
 
     api_key = os.environ.get("AIGHT_API_KEY")
     if not api_key:
-        print("Set AIGHT_API_KEY (Integrate tab of your AIght Workspace)", file=sys.stderr)
+        print("Set AIGHT_API_KEY (Project settings in your AIght Workspace)", file=sys.stderr)
         return 1
     url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
 

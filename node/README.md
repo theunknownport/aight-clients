@@ -42,7 +42,7 @@ price**: the server prices each row from its own table at receive time. This
 SDK ships no price table on purpose — a bundled copy is a second table, and a
 second table drifts.
 
-Get an API key from the Integrate tab of your AIght Workspace, then:
+Get an API key from Project settings in your AIght Workspace, then:
 
 ```bash
 export AIGHT_API_KEY="aight_..."

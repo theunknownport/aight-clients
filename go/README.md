@@ -51,7 +51,7 @@ aight.TracedLLMCall("gpt-4o-mini", 180, 60)
 aight.Push(aight.CostProcessor, "", "") // reads AIGHT_API_KEY from the environment
 ```
 
-Get an API key from the Integrate tab of your AIght Workspace, then:
+Get an API key from Project settings in your AIght Workspace, then:
 
 ```bash
 export AIGHT_API_KEY="aight_..."

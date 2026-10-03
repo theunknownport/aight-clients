@@ -2,7 +2,7 @@
 
 Client libraries that instrument your agent's LLM calls, attribute the cost
 to the exact source line that issued them, and push that data to the
-[AIght Workspace](https://aight.studio) at aight.studio (the Integrate tab
+[AIght Workspace](https://aight.studio) at aight.studio (Project settings
 mints the API key). The Python install also carries four collectors and a
 proxy, which bring in the same spend from agents you run but did not write —
 see **Collectors, and the proxy** below.
@@ -232,7 +232,8 @@ X-Aight-Sdk-Version: 0.1.0          # optional, ditto
     "output_tokens": 180,            # optional
     "cache_read_tokens": 4000,       # optional, priced at the cache-read rate
     "cache_creation_tokens": 800,    # optional, at the cache-write rate
-    "latency_ms": 820.5,             # optional
+    "latency_ms": 820.5,             # optional, the TOTAL over this row's
+                                     # calls in ms, not a per-call average
     "trace_id": "..."                # optional, for explicit event matching
   }
 ]

@@ -466,7 +466,7 @@ def test_a_key_for_another_project_refuses_instead_of_resuming(tmp_path, monkeyp
     """The one mistake the marker cannot catch by itself.
 
     A marker records that calls were *sent*, never where. So a key minted in a
-    different project's Integrate tab resumes this machine's coverage, pushes
+    different project's settings resumes this machine's coverage, pushes
     only what is newer than it into the wrong workspace, and leaves the project
     that was meant permanently missing that window — silently, because every
     one of those pushes succeeds. Refusing is the only safe direction.

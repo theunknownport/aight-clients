@@ -53,7 +53,7 @@ Tracing.tracedLlmCall("gpt-4o-mini", 180, 60);
 Remote.push(Tracing.COST_PROCESSOR, null, null); // reads AIGHT_API_KEY from the environment
 ```
 
-Get an API key from the Integrate tab of your AIght Workspace, then:
+Get an API key from Project settings in your AIght Workspace, then:
 
 ```bash
 export AIGHT_API_KEY="aight_..."
