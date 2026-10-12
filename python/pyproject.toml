@@ -1,12 +1,22 @@
 [project]
 name = "aight"
-version = "0.2.1"
+version = "0.2.2"
 description = "Attribute LLM spend to the exact source line, and push it to the AIght Workspace at aight.studio."
 # SPDX identifier; the text it refers to is the LICENSE file in this directory.
 # The bare string is PEP 639, which is why the build floor below is setuptools
 # 77 — older versions want the deprecated {text = "Apache-2.0"} table instead.
 license = "Apache-2.0"
 requires-python = ">=3.11"
+readme = "README.md"
+keywords = ["llm", "llm-cost", "ai-agents", "observability", "llmops", "profiler",
+            "claude-code", "langchain", "langgraph", "openai", "anthropic", "finops"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Monitoring",
+]
 dependencies = [
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
@@ -30,6 +40,7 @@ aight-proxy = "aight.collect.proxy:cli"
 
 [project.urls]
 Homepage = "https://aight.studio"
+Documentation = "https://aight.studio/docs"
 Repository = "https://github.com/theunknownport/aight-clients"
 
 [build-system]

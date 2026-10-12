@@ -2,13 +2,34 @@
   "name": "aight-sdk",
   "version": "0.1.0",
   "description": "Attribute LLM spend to the exact source line, and push it to the AIght Workspace at aight.studio.",
+  "keywords": [
+    "llm",
+    "llm-cost",
+    "ai-agents",
+    "observability",
+    "llmops",
+    "profiler",
+    "openai",
+    "anthropic",
+    "langchain",
+    "finops"
+  ],
+  "homepage": "https://aight.studio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theunknownport/aight-clients.git",
+    "directory": "node"
+  },
   "type": "module",
   "main": "src/index.js",
   "exports": "./src/index.js",
   "engines": {
     "node": ">=18"
   },
-  "files": ["src", "AGENTS.md"],
+  "files": [
+    "src",
+    "AGENTS.md"
+  ],
   "license": "Apache-2.0",
   "scripts": {
     "test": "node --test test/*.test.js"
