@@ -137,7 +137,17 @@ find the line that issued the call. An agent you run but did not write has no
 line of yours on the stack, so there is nothing to instrument and no library to
 import. AIght traces those by reading the agent's own transcripts instead.
 
-`pip install aight` also installs `aight-collect`:
+`pip install aight` also installs `aight-collect`. To see what your Claude Code
+history would cost at API list prices, with no account and nothing sent:
+
+```bash
+pip install aight && aight-collect --report --all-projects
+```
+
+That prints a breakdown by token type, step and model. Only the model names go
+out, to fetch their rates from AIght's price table; drop `--all-projects` for
+just this directory, add `--since 2026-10-01` to narrow it. To push to your
+Workspace instead:
 
 ```bash
 export AIGHT_API_KEY="aight_..."

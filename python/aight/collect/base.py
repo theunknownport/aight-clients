@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -581,6 +582,94 @@ def watch(
             return 0
 
 
+def fetch_prices(rows: list[dict], ingest_url: str) -> dict | None:
+    """The server's per-1K rates for the models in `rows`, or None offline.
+
+    Only model names go up. The SDK ships no price table on purpose (copies
+    drifted from the server's and priced new models at zero), so a report
+    asks the one table there is, and falls back to tokens when it can't."""
+    models = sorted({r["model"] for r in rows if r.get("model")})
+    if not models:
+        return {}
+    base = ingest_url.split("/api/", 1)[0]
+    query = urllib.parse.urlencode({"models": ",".join(models)})
+    try:
+        with urllib.request.urlopen(f"{base}/api/pricing?{query}", timeout=10) as resp:
+            return json.load(resp).get("prices") or {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+TOKEN_KINDS = (
+    ("cache read", "cache_read_tokens", "cache_read"),
+    ("cache write", "cache_creation_tokens", "cache_creation"),
+    ("output", "output_tokens", "output"),
+    ("fresh input", "input_tokens", "input"),
+)
+
+
+def report(rows: list[dict], agent: str, prices: dict | None, top: int = 8) -> str:
+    """A breakdown worth a screenshot: what the calls in `rows` would cost at
+    list price, by token type, by step and by model. With `prices` None (the
+    server was unreachable) it reports tokens instead of dollars."""
+    priced = prices is not None
+    by_kind: dict[str, float] = {}
+    by_step: dict[str, list[float]] = {}
+    by_model: dict[str, float] = {}
+    unpriced: set[str] = set()
+    calls = 0
+    for r in rows:
+        rate = (prices or {}).get(r["model"]) if priced else None
+        if priced and rate is None:
+            unpriced.add(r["model"])
+        # A coding agent's step is the tool, whatever file it touched (and the
+        # path would put the user's directories in a shared screenshot); your
+        # own agent's step is the line, named by file, not full path.
+        frame = r["chain"][-1]
+        if r.get("kind") == "external" or not frame.get("filepath"):
+            step = frame.get("function") or "?"
+        else:
+            step = f"{Path(frame['filepath']).name}:{frame['lineno']}"
+        row_total = 0.0
+        for label, key, rate_key in TOKEN_KINDS:
+            n = r.get(key, 0) or 0
+            v = (n / 1000) * (rate or {}).get(rate_key, 0.0) if priced else n
+            by_kind[label] = by_kind.get(label, 0.0) + v
+            row_total += v
+        s = by_step.setdefault(step, [0.0, 0])
+        s[0] += row_total
+        s[1] += r.get("calls", 0)
+        by_model[r["model"]] = by_model.get(r["model"], 0.0) + row_total
+        calls += r.get("calls", 0)
+
+    total = sum(by_kind.values())
+
+    def amount(v: float) -> str:
+        return f"${v:,.2f}" if priced else f"{v:,.0f} tok"
+
+    def line(name: str, v: float, extra: str = "") -> str:
+        share = v / total if total else 0
+        bar = "█" * round(share * 24)
+        name = name if len(name) <= 28 else name[:27] + "…"
+        return f"  {name:<28} {amount(v):>14} {share:>5.0%}  {bar}{extra}"
+
+    out = [f"{agent} · {calls:,} calls · " + (
+        "priced at API list rates" if priced else "tokens only (pricing unreachable)"),
+        "", f"  {'TOTAL':<28} {amount(total):>14}", "", "By token type"]
+    out += [line(k, v) for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1])]
+    out += ["", "By step"]
+    steps = sorted(by_step.items(), key=lambda kv: -kv[1][0])
+    out += [line(k, v[0], f"  {int(v[1]):,} calls") for k, v in steps[:top]]
+    if len(steps) > top:
+        out.append(f"  … {len(steps) - top} more steps")
+    out += ["", "By model"]
+    out += [line(k, v) for k, v in sorted(by_model.items(), key=lambda kv: -kv[1])[:top]]
+    if unpriced:
+        out += ["", "No list price yet for: " + ", ".join(sorted(unpriced)) + " (counted as $0)"]
+    out += ["", "Nothing was sent. Per line of your own agent's code: https://aight.studio"]
+    return "\n".join(out)
+
+
 def main(config: Collector, argv: list[str] | None = None) -> int:
     # Not description=__doc__: a module docstring is fifty lines of rationale
     # for whoever maintains the parser, and `--help` is the first thing a
@@ -603,6 +692,9 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
                             "so running it again over an already-pushed directory doubles it")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the rows instead of pushing them")
+    parser.add_argument("--report", action="store_true",
+                        help="print a priced breakdown (token type, step, model) and push "
+                             "nothing; every call unless --since narrows it")
     parser.add_argument("--watch", action="store_true",
                         help="keep running: re-scan and push on an interval, until interrupted")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SECONDS,
@@ -610,6 +702,12 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
                         help=f"seconds between scans with --watch "
                              f"(default: {DEFAULT_INTERVAL_SECONDS})")
     args = parser.parse_args(argv)
+
+    if args.report and args.watch:
+        parser.error("--report prints once; it can't be combined with --watch.")
+    # A report pushes nothing, so re-reading all history can't double anything.
+    if args.report and not args.since:
+        args.all_time = True
 
     # --since/--all-time scope every file by hand; a plain run resumes.
     manual = args.all_time or bool(args.since)
@@ -718,6 +816,10 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
     rows = config.rows_for(calls)
     print(f"{len(paths)} transcript(s), {len(calls)} unique calls, {len(rows)} rows")
 
+    if args.report:
+        url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
+        print(report(rows, config.agent_id, fetch_prices(rows, url)))
+        return 0
     if args.dry_run:
         print(json.dumps(rows, indent=2))
         return 0

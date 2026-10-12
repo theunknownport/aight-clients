@@ -153,7 +153,7 @@ reporting an empty result as success.
 The four collectors share their flags: a per-file resume marker under
 `~/.aight/` (one file per collector — `claude_code_collect.json`,
 `codex_collect.json`, `gemini_collect.json`, `aider_collect.json`) so a plain
-re-run sends only what is new, plus `--dry-run`, `--since <ISO date|git rev>`,
+re-run sends only what is new, plus `--report` (a priced breakdown, nothing sent), `--dry-run`, `--since <ISO date|git rev>`,
 `--all-time`, `--root`, and `--watch [--interval SECONDS]`. `--all-projects`
 widens past the default root where the default is not already everything.
 

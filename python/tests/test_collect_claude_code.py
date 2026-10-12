@@ -737,3 +737,40 @@ def test_push_builds_a_request_that_reports_the_installed_version(monkeypatch):
     assert seen["headers"]["x-aight-sdk-version"] == base.SDK_VERSION
     assert seen["headers"]["x-aight-sdk-language"] == "a-collector"
     assert seen["headers"]["authorization"] == "Bearer key"
+
+
+def _row(step, model, calls, cache_read=0, output=0, filepath="", kind="external"):
+    return {
+        "chain": [{"filepath": "claude-code", "lineno": 0, "function": "claude-code"},
+                  {"filepath": filepath, "lineno": 0, "function": step}],
+        "kind": kind, "model": model, "calls": calls, "cost_usd": 0.0,
+        "input_tokens": 0, "output_tokens": output,
+        "cache_read_tokens": cache_read, "cache_creation_tokens": 0, "trace_id": "",
+    }
+
+
+def test_report_prices_with_the_server_rates_and_groups_tools_not_paths():
+    rows = [_row("reply", "m", 10, cache_read=1_000_000),
+            _row("Read", "m", 2, output=2000, filepath="/Users/someone/secret/notes.md"),
+            _row("Read", "unknown", 1, output=1000)]
+    out = collector.report(rows, "claude-code", {"m": {"cache_read": 0.0003, "output": 0.015}, "unknown": None})
+    assert "$0.30" in out.split("By step")[0]  # 1M cache read at 0.0003/1K
+    assert "$0.33" in out  # + 2K output at 0.015/1K; the unknown model is $0
+    assert "/Users/someone" not in out
+    assert out.count("Read") == 1
+    assert "No list price yet for: unknown" in out
+
+
+def test_report_falls_back_to_tokens_when_pricing_is_unreachable():
+    out = collector.report([_row("reply", "m", 1, cache_read=5000)], "claude-code", None)
+    assert "tokens only" in out and "5,000 tok" in out
+
+
+def test_report_pushes_nothing_and_reads_all_history(tmp_path, monkeypatch, capsys):
+    pushed = _recording_push(monkeypatch)
+    _recent(tmp_path / "base")
+    monkeypatch.setattr(collector, "fetch_prices", lambda rows, url: {})
+    assert main(["--root", str(tmp_path / "base"), "--report"]) == 0
+    assert pushed == []
+    out = capsys.readouterr().out
+    assert "Nothing was sent" in out and "go up" not in out
