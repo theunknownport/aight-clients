@@ -87,6 +87,10 @@ public final class Remote {
                     // reads as "match business events by time window" rather
                     // than as a bogus explicit id.
                     .append(",\"trace_id\":").append(quote(b.traceId()));
+            // Omitted, not sent empty, when no tags scope was active.
+            if (!k.tags().isEmpty()) {
+                json.append(",\"tags\":").append(tagsJson(k.tags()));
+            }
             // Omitted entirely when nobody timed the call, rather than sent as
             // 0. The server stores whatever arrives, and the Workspace reads a
             // stored 0 as a real — impossibly fast — measurement where an
@@ -201,6 +205,9 @@ public final class Remote {
                     "No API key. Pass one, or set AIGHT_API_KEY (get one from Project settings in your AIght Workspace at aight.studio).");
         }
 
+        // The options' own tags, else the thread's tags scope.
+        Map<String, String> eventTags = o.tags().isEmpty() ? Tracing.currentTags() : o.tags();
+
         // A single object, not an array — /api/ingest/events is the one ingest
         // endpoint that takes one event per request.
         String body = "{\"event_id\":" + quote(o.eventId())
@@ -209,6 +216,8 @@ public final class Remote {
                 + ",\"currency\":" + quote(o.currency())
                 + ",\"timestamp\":" + o.timestamp()
                 + ",\"trace_id\":" + quote(o.traceId())
+                + (o.agent().isEmpty() ? "" : ",\"agent\":" + quote(o.agent()))
+                + (eventTags.isEmpty() ? "" : ",\"tags\":" + tagsJson(eventTags))
                 + '}';
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -230,6 +239,18 @@ public final class Remote {
         @SuppressWarnings("unchecked")
         Map<String, Object> result = parsed instanceof Map ? (Map<String, Object>) parsed : Map.of();
         return result;
+    }
+
+    /** A flat {"k":"v"} object. */
+    private static String tagsJson(Map<String, String> tags) {
+        StringBuilder out = new StringBuilder("{");
+        tags.forEach((k, v) -> {
+            if (out.length() > 1) {
+                out.append(',');
+            }
+            out.append(quote(k)).append(':').append(quote(v));
+        });
+        return out.append('}').toString();
     }
 
     /**

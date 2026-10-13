@@ -4,13 +4,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.DoubleAdder;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -29,7 +34,113 @@ public final class Tracing {
      * summed both models' tokens under whichever name was recorded last, and
      * the server then repriced every cheap call at the expensive model's rate.
      */
-    public record BucketKey(String filepath, int lineno, String function, String model) {}
+    public record BucketKey(String filepath, int lineno, String function, String model, Map<String, String> tags) {
+
+        /**
+         * Tags are part of the key for the same reason the model is: merging
+         * order o_1's calls into order o_2's row would hand the server one row
+         * it can only match to one of them. Map equality ignores order, so
+         * equal tag sets always share a bucket.
+         */
+        public BucketKey {
+            tags = tags == null ? Map.of() : Map.copyOf(tags);
+        }
+
+        /** A key with no tags — what every call outside a {@link #tags} scope gets. */
+        public BucketKey(String filepath, int lineno, String function, String model) {
+            this(filepath, lineno, function, model, Map.of());
+        }
+    }
+
+    // Span tags: business keys (order_id, user_id, ...) the server can match a
+    // business event against when the event shares one. Limits match the
+    // ingest validator, so the SDK drops what the server would refuse instead
+    // of the whole push failing on it. Mirrors tracing.py's tags().
+    public static final int MAX_TAGS = 16;
+    public static final int MAX_TAG_KEY = 64;
+    public static final int MAX_TAG_VALUE = 256;
+
+    private static final ThreadLocal<Map<String, String>> ACTIVE_TAGS = ThreadLocal.withInitial(Map::of);
+    private static final Logger LOG = Logger.getLogger("studio.aight.sdk");
+    private static final Set<String> WARNED = ConcurrentHashMap.newKeySet();
+
+    // Once per kind per process: a hot loop over a bad tag would otherwise log
+    // the same line on every call.
+    private static void warnOnce(String kind, String message) {
+        if (WARNED.add(kind)) {
+            LOG.warning("aight: " + message);
+        }
+    }
+
+    /**
+     * {@code base} plus {@code add}, add winning, with what the server would
+     * refuse dropped and every value stringified. add's keys go in sorted, so
+     * which extras get dropped past {@link #MAX_TAGS} never depends on map
+     * order. Never throws: a bad tag costs you that tag, not your request.
+     */
+    static Map<String, String> mergeTags(Map<String, String> base, Map<String, ?> add) {
+        Map<String, String> out = new LinkedHashMap<>(base);
+        Map<String, Object> sorted = new TreeMap<>();
+        if (add != null) {
+            add.forEach((k, v) -> {
+                if (k != null && v != null) {
+                    sorted.put(String.valueOf(k), v);
+                }
+            });
+        }
+        sorted.forEach((key, raw) -> {
+            String value = String.valueOf(raw);
+            if (key.length() > MAX_TAG_KEY) {
+                warnOnce("key", "tag key longer than " + MAX_TAG_KEY + " chars dropped");
+            } else if (value.length() > MAX_TAG_VALUE) {
+                warnOnce("value", "tag \"" + key + "\" dropped: value longer than " + MAX_TAG_VALUE + " chars");
+            } else if (!out.containsKey(key) && out.size() >= MAX_TAGS) {
+                warnOnce("count", "more than " + MAX_TAGS + " tags; extras dropped");
+            } else {
+                out.put(key, value);
+            }
+        });
+        return Collections.unmodifiableMap(out);
+    }
+
+    /**
+     * An open tags scope; closing it restores the scope that was active before.
+     * Use it in try-with-resources so the restore can't be skipped.
+     */
+    public static final class Tags implements AutoCloseable {
+        private final Map<String, String> previous;
+
+        private Tags(Map<String, String> previous) {
+            this.previous = previous;
+        }
+
+        @Override
+        public void close() {
+            if (previous.isEmpty()) {
+                ACTIVE_TAGS.remove();
+            } else {
+                ACTIVE_TAGS.set(previous);
+            }
+        }
+    }
+
+    /**
+     * Attaches business keys to every call this thread records until the scope
+     * closes: {@code try (var t = Tracing.tags(Map.of("order_id", "o_123"))) {...}}.
+     * Nests and merges, inner wins; values are stringified. {@link
+     * Remote#pushEvent} inside the scope sends the same tags when it is given
+     * none. Per thread: work handed to an executor does not inherit it.
+     */
+    public static Tags tags(Map<String, ?> tags) {
+        Map<String, String> previous = ACTIVE_TAGS.get();
+        ACTIVE_TAGS.set(mergeTags(previous, tags));
+        return new Tags(previous);
+    }
+
+    /** The tags active on this thread, or an empty map outside any scope. */
+    public static Map<String, String> currentTags() {
+        return ACTIVE_TAGS.get();
+    }
 
     /** Aggregates calls and tokens for one BucketKey. Thread-safe. */
     public static final class Bucket {
@@ -284,7 +395,7 @@ public final class Tracing {
             String model, int inputTokens, int outputTokens, CallInfo info) {
         BucketKey site = resolveCallerFrame();
         captureSnippet(site.filepath(), site.lineno());
-        BucketKey key = new BucketKey(site.filepath(), site.lineno(), site.function(), model);
+        BucketKey key = new BucketKey(site.filepath(), site.lineno(), site.function(), model, currentTags());
         COST_PROCESSOR.record(key, inputTokens, outputTokens, info);
     }
 

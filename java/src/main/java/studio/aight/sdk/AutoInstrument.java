@@ -134,15 +134,18 @@ public final class AutoInstrument {
         public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler)
                 throws IOException, InterruptedException {
             HttpResponse<T> response = delegate.send(request, handler);
-            record(response);
+            record(response, Tracing.currentTags());
             return response;
         }
 
         @Override
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(
                 HttpRequest request, HttpResponse.BodyHandler<T> handler) {
+            // Read on the caller's thread: the callback runs on another one,
+            // where this thread's tags scope is not visible.
+            Map<String, String> tags = Tracing.currentTags();
             return delegate.sendAsync(request, handler).thenApply(response -> {
-                record(response);
+                record(response, tags);
                 return response;
             });
         }
@@ -152,8 +155,9 @@ public final class AutoInstrument {
                 HttpRequest request,
                 HttpResponse.BodyHandler<T> handler,
                 HttpResponse.PushPromiseHandler<T> pushPromiseHandler) {
+            Map<String, String> tags = Tracing.currentTags();
             return delegate.sendAsync(request, handler, pushPromiseHandler).thenApply(response -> {
-                record(response);
+                record(response, tags);
                 return response;
             });
         }
@@ -165,7 +169,7 @@ public final class AutoInstrument {
          * the correct answer: a row with no model or no tokens is one the
          * server cannot price, and a row it cannot price is noise.
          */
-        private <T> void record(HttpResponse<T> response) {
+        private <T> void record(HttpResponse<T> response, Map<String, String> tags) {
             if (!(response.body() instanceof String text)) {
                 return;
             }
@@ -215,7 +219,7 @@ public final class AutoInstrument {
             Tracing.BucketKey site = resolveCallerFrame();
             Tracing.captureSnippet(site.filepath(), site.lineno());
             Tracing.COST_PROCESSOR.record(
-                    new Tracing.BucketKey(site.filepath(), site.lineno(), site.function(), model),
+                    new Tracing.BucketKey(site.filepath(), site.lineno(), site.function(), model, tags),
                     (int) input,
                     (int) output,
                     // No latency: this SDK does not time a call it did not make,
