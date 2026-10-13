@@ -1,7 +1,10 @@
 package aight
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -113,6 +116,11 @@ type BucketKey struct {
 	Lineno   int
 	Function string
 	Model    string
+	// Tags is the canonical JSON of the span tags active when the call was
+	// recorded (keys sorted), "" when none. In the key for the same reason the
+	// model is: merging order o_1's calls into order o_2's row would hand the
+	// server one row it can only match to one of them.
+	Tags string
 }
 
 // Bucket aggregates calls and tokens for one BucketKey. No cost: only the
@@ -134,6 +142,96 @@ type Bucket struct {
 	// id from the run that produced the spend lands on its row. Empty means the
 	// caller never set one, and the server falls back to its time-window match.
 	TraceID string
+}
+
+// Span tags: business keys (order_id, user_id, ...) the server can match a
+// business event against when the event shares one. Limits match the ingest
+// validator, so the SDK drops what the server would refuse instead of the whole
+// push failing on it. Mirrors tracing.py's tags().
+const (
+	MaxTags     = 16
+	MaxTagKey   = 64
+	MaxTagValue = 256
+)
+
+type tagsCtxKey struct{}
+
+var (
+	warnedMu sync.Mutex
+	warned   = map[string]bool{}
+)
+
+// warnOnce logs once per kind per process: a hot loop over a bad tag would
+// otherwise print the same line on every call.
+func warnOnce(kind, msg string) {
+	warnedMu.Lock()
+	defer warnedMu.Unlock()
+	if !warned[kind] {
+		warned[kind] = true
+		log.Printf("aight: %s", msg)
+	}
+}
+
+// mergeTags returns base plus add, add winning, with what the server would
+// refuse dropped. base is trusted (already merged); add's keys go in sorted
+// so which extras get dropped past MaxTags doesn't depend on map order. Never
+// panics or errors: a bad tag costs you that tag, not your request.
+func mergeTags(base, add map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(add))
+	for k, v := range base {
+		out[k] = v
+	}
+	keys := make([]string, 0, len(add))
+	for k := range add {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := add[k]
+		switch _, exists := out[k]; {
+		case k == "" || len(k) > MaxTagKey:
+			warnOnce("key", fmt.Sprintf("tag key empty or longer than %d chars dropped", MaxTagKey))
+		case len(v) > MaxTagValue:
+			warnOnce("value", fmt.Sprintf("tag %q dropped: value longer than %d chars", k, MaxTagValue))
+		case !exists && len(out) >= MaxTags:
+			warnOnce("count", fmt.Sprintf("more than %d tags; extras dropped", MaxTags))
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// WithTags returns a ctx whose LLM calls (TracedLLMCallCtx, or a request sent
+// through TracedHTTPClient with this ctx) carry tags on their span rows, and
+// whose PushEventCtx sends them when the event names none. Nests and merges,
+// inner wins.
+func WithTags(ctx context.Context, tags map[string]string) context.Context {
+	return context.WithValue(ctx, tagsCtxKey{}, mergeTags(TagsFrom(ctx), tags))
+}
+
+// TagsFrom returns a copy of the tags WithTags put on ctx, or an empty map.
+func TagsFrom(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if ctx == nil {
+		return out
+	}
+	tags, _ := ctx.Value(tagsCtxKey{}).(map[string]string)
+	for k, v := range tags {
+		out[k] = v
+	}
+	return out
+}
+
+// tagsKey is the canonical BucketKey.Tags form of ctx's tags: json.Marshal
+// sorts map keys, so equal sets always encode alike.
+func tagsKey(ctx context.Context) string {
+	tags := TagsFrom(ctx)
+	if len(tags) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(tags)
+	return string(b)
 }
 
 // Site returns the key with the model cleared — the "where in the code" half
@@ -295,12 +393,19 @@ func TracedLLMCall(model string, inputTokens, outputTokens int) {
 // TracedLLMCallInfo is TracedLLMCall for a call that reported cache tokens,
 // a duration, a trace id, or any combination of the three.
 func TracedLLMCallInfo(model string, inputTokens, outputTokens int, info CallInfo) {
+	TracedLLMCallCtx(context.Background(), model, inputTokens, outputTokens, info)
+}
+
+// TracedLLMCallCtx is TracedLLMCallInfo for a call made under a ctx: the
+// tags WithTags put on ctx go onto the call's span row.
+func TracedLLMCallCtx(ctx context.Context, model string, inputTokens, outputTokens int, info CallInfo) {
 	site := resolveCallerFrame()
 	// Grab the source around the line before recording, so Push can send it
 	// alongside the chain frame. Best-effort — a miss changes nothing here.
 	captureSnippet(site.Filepath, site.Lineno)
 	key := site.Site()
 	key.Model = model
+	key.Tags = tagsKey(ctx)
 	CostProcessor.record(
 		key, inputTokens, outputTokens, info.CacheReadTokens, info.CacheCreationTokens,
 		info.LatencyMs, info.TraceID)

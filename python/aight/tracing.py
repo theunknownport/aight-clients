@@ -10,7 +10,9 @@ import inspect
 import json
 import linecache
 import os
+import warnings
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import uuid
 
@@ -57,6 +59,68 @@ class TraceContext:
             _active_trace_id.reset(self._token_trace)
         if self._token_labels:
             _active_labels.reset(self._token_labels)
+
+
+# Span tags: business keys (order_id, user_id, ...) the server can match a
+# business event against when the event shares one. Limits match the ingest
+# validator, so the SDK drops what the server would refuse instead of the whole
+# push failing on it.
+MAX_TAGS = 16
+MAX_TAG_KEY = 64
+MAX_TAG_VALUE = 256
+
+_active_tags: contextvars.ContextVar[dict[str, str]] = contextvars.ContextVar("_active_tags")
+_WARNED: set[str] = set()
+
+
+def _warn_once(kind: str, message: str) -> None:
+    # Once per kind per process: a hot loop over a bad tag would otherwise
+    # print the same line on every call.
+    if kind not in _WARNED:
+        _WARNED.add(kind)
+        warnings.warn(f"aight: {message}", stacklevel=3)
+
+
+def clean_tags(tags: dict | None) -> dict[str, str]:
+    """Stringify keys and values and drop what the server would refuse. Never
+    raises: a bad tag costs you that tag, not your agent's request."""
+    out: dict[str, str] = {}
+    for key, value in (tags or {}).items():
+        key, value = str(key), str(value)
+        if not key or len(key) > MAX_TAG_KEY:
+            _warn_once("key", f"tag key empty or longer than {MAX_TAG_KEY} chars dropped: {key[:20]!r}")
+            continue
+        if len(value) > MAX_TAG_VALUE:
+            _warn_once("value", f"tag {key!r} dropped: value longer than {MAX_TAG_VALUE} chars")
+            continue
+        out[key] = value
+    if len(out) > MAX_TAGS:
+        _warn_once("count", f"more than {MAX_TAGS} tags; extras dropped")
+        out = dict(list(out.items())[:MAX_TAGS])
+    return out
+
+
+@contextmanager
+def tags(mapping: dict | None = None, /, **kv):
+    """Attach business keys to every span recorded inside the block:
+
+        with aight.tags(order_id="o_123", user_id="u_9"):
+            ...
+        with aight.tags({"order.id": "o_123"}):  # keys that aren't identifiers
+            ...
+
+    Nests and merges, inner wins. push_event() inside the block picks the same
+    tags up when you pass none, so the event and its spend share them."""
+    token = _active_tags.set(clean_tags({**_active_tags.get({}), **(mapping or {}), **kv}))
+    try:
+        yield
+    finally:
+        _active_tags.reset(token)
+
+
+def current_tags() -> dict[str, str]:
+    """The active tags scope, or {} outside one."""
+    return dict(_active_tags.get({}))
 
 
 def current_trace_id() -> str | None:
@@ -116,11 +180,15 @@ class _Bucket:
 
 # One attributed call site, outer-to-leaf.
 Chain = tuple[tuple[str, int, str], ...]
-# (call chain, model) -> totals. The model belongs in the key, not just on the
-# bucket: a single line that calls two models must stay two buckets, each
+# Sorted (key, value) pairs — hashable, and order-independent.
+Tags = tuple[tuple[str, str], ...]
+# (call chain, model, tags) -> totals. The model belongs in the key, not just on
+# the bucket: a single line that calls two models must stay two buckets, each
 # priced on its own tokens. Summing them under one model name is what made the
-# server reprice the whole aggregate at whichever rate was recorded last.
-BucketKey = tuple[Chain, str]
+# server reprice the whole aggregate at whichever rate was recorded last. Tags
+# are in the key for the same reason: merging order o_1's calls into order
+# o_2's row would hand the server one row it can only match to one of them.
+BucketKey = tuple[Chain, str, Tags]
 
 
 # GenAI semantic conventions have used both key names across versions; check
@@ -196,6 +264,11 @@ class CostByLineProcessor(SpanProcessor):
         if not span.attributes or "code.chain.length" not in span.attributes:
             chain = _resolve_caller_chain()
             _set_chain_attributes(span, chain)
+        # Read here, at start, so an auto-instrumented span picks up the scope
+        # it was opened in, not whatever is active when it ends.
+        active = _active_tags.get({})
+        if active and "aight.tags" not in (span.attributes or {}):
+            span.set_attribute("aight.tags", json.dumps(active, sort_keys=True))
 
     def on_end(self, span) -> None:
         attrs = span.attributes or {}
@@ -206,7 +279,8 @@ class CostByLineProcessor(SpanProcessor):
         # calls=1 row with no model and no tokens.
         if not model or usage is None:
             return
-        bucket = self.buckets[(_chain_from_attrs(attrs), model)]
+        span_tags = tuple(sorted(json.loads(attrs.get("aight.tags") or "{}").items()))
+        bucket = self.buckets[(_chain_from_attrs(attrs), model, span_tags)]
         bucket.calls += 1
         bucket.input_tokens += usage[0]
         bucket.output_tokens += usage[1]
@@ -236,7 +310,7 @@ class CostByLineProcessor(SpanProcessor):
         SDK has no price table. The Workspace reprices these rows and is where
         the spend lives."""
         lines = []
-        for (chain, model), b in sorted(self.buckets.items(), key=lambda kv: -kv[1].calls):
+        for (chain, model, *_tags), b in sorted(self.buckets.items(), key=lambda kv: -kv[1].calls):
             leaf_path, leaf_lineno, leaf_fn = chain[-1]
             where = f"{os.path.basename(leaf_path)}:{leaf_lineno} ({leaf_fn})"
             if model:

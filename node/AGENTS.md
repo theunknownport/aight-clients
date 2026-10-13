@@ -50,7 +50,19 @@ import { randomUUID } from 'node:crypto' // Node 18 has no global crypto
 const runId = randomUUID()
 tracedLlmCall(model, resp.usage.input_tokens, resp.usage.output_tokens, 0, 0, latencyMs, runId)
 await pushEvent('checkout.completed', 49.0, { traceId: runId })
-pushEvent returns the server's response, { ingested, results }, where each result carries the match_type it resolved to (EXPLICIT / IMPLICIT / UNMATCHED) — worth logging when you are wiring this up, and not something to report as a result on its own.
+pushEvent returns the server's response, { ingested, results }, where each result carries the match_type it resolved to (EXPLICIT / DECLARED / TAGGED / IMPLICIT / UNMATCHED) — worth logging when you are wiring this up, and not something to report as a result on its own.
+8. Optional: Matching business events to agents
+Run the work inside withTags with the business keys this project already has, and declare the agent on the event:
+import { fileURLToPath } from 'node:url'
+import { withTags, pushEvent } from 'aight-sdk'
+
+await withTags({ orderId: order.id }, async () => {
+  // traced calls in here carry the tags
+  await pushEvent('checkout.completed', 49.0, { agent: fileURLToPath(import.meta.url) })
+})
+pushEvent uses the scope's tags when you pass no { tags }.
+The server matches an event to an agent in this order, first single-agent answer wins: (1) trace_id the event shares with one agent's spans (EXPLICIT); (2) the event's declared agent, which is the first chain frame's filepath on that agent's span rows and the same string pushValue uses (DECLARED); (3) a tag whose exact key=value is on both the event and spans of exactly one agent (TAGGED); (4) the time window, on the Scale plan only and a guess (IMPLICIT). Otherwise UNMATCHED. Collected (external) agents are never matched.
+Tags only help when the same key=value is on both a span and the event. A tag two agents' spans share is ambiguous and is not matched, so tag with keys that identify the unit of work (order_id, ticket_id) and not ones every agent sees. Only use keys this project really has; never invent ids. Limits: 16 tags, keys 1-64 chars, values up to 256. Extras are dropped with a one-time warning and never raised. The agent string is the absolute path of the file that calls tracedLlmCall.
 Guardrails
 Never fabricate a metric aight doesn't actually capture.
 autoInstrument() is a real patch, but it only covers providers with an OpenTelemetry instrumentor installed and it needs those packages added to the project — say that plainly when you offer it, rather than implying it is built in. Don't invent labels, TraceContext blocks, or multi-frame call chains; those exist only in the Python SDK today.

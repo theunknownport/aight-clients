@@ -2,6 +2,7 @@ package aight
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -130,7 +131,7 @@ func (t *tracingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if readErr != nil {
 		return resp, nil
 	}
-	t.record(body)
+	t.record(req.Context(), body)
 	return resp, nil
 }
 
@@ -138,7 +139,7 @@ func (t *tracingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 // error body, a streamed chunk, a provider that reports no usage — records
 // nothing at all, which is the correct answer: a row with no model or no tokens
 // is one the server cannot price, and a row it cannot price is noise.
-func (t *tracingTransport) record(body []byte) {
+func (t *tracingTransport) record(ctx context.Context, body []byte) {
 	var out providerResponse
 	if err := json.Unmarshal(body, &out); err != nil || out.Model == "" {
 		return
@@ -174,6 +175,8 @@ func (t *tracingTransport) record(body []byte) {
 	captureSnippet(site.Filepath, site.Lineno)
 	key := site.Site()
 	key.Model = out.Model
+	// The request's ctx is the caller's, so WithTags reaches this row too.
+	key.Tags = tagsKey(ctx)
 	// No latency — the transport could time the round trip, but a number this
 	// SDK measured on its own would be the one claim the Workspace cannot
 	// corroborate. And no trace id: the transport never learns the caller's run.

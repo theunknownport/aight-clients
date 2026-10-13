@@ -1,8 +1,12 @@
 package aight
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -587,4 +591,159 @@ func TestReportValueAttributesToCallingFileAndAccumulates(t *testing.T) {
 			t.Fatalf("expected accumulated value 150, got %v", value)
 		}
 	}
+}
+
+// ---- Span tags and the event's agent/tags (matching signals) ----
+
+// captureRows pushes CostProcessor to a stub and returns the rows it sent.
+func captureRows(t *testing.T) []map[string]any {
+	t.Helper()
+	var rows []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&rows)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	if err := Push(CostProcessor, "aight_test_key", srv.URL); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	return rows
+}
+
+// captureEvent sends one event under ctx and returns the decoded body.
+func captureEvent(t *testing.T, ctx context.Context, opts EventOptions) map[string]any {
+	t.Helper()
+	var event map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&event)
+		_, _ = w.Write([]byte(`{"ingested":1,"results":[]}`))
+	}))
+	defer srv.Close()
+	opts.APIKey, opts.URL = "aight_test_key", srv.URL
+	if _, err := PushEventCtx(ctx, "checkout", 49, opts); err != nil {
+		t.Fatalf("PushEventCtx: %v", err)
+	}
+	return event
+}
+
+func TestTagsLandOnRowsInsideTheScopeAndNotOutside(t *testing.T) {
+	CostProcessor.Clear()
+	ctx := WithTags(context.Background(), map[string]string{"order_id": "o_123"})
+	TracedLLMCallCtx(ctx, "gpt-4o-mini", 10, 5, CallInfo{})
+	TracedLLMCallCtx(context.Background(), "gpt-4o-mini", 10, 5, CallInfo{})
+
+	var tagged, untagged int
+	for _, row := range captureRows(t) {
+		if tags, ok := row["tags"].(map[string]any); ok {
+			tagged++
+			if tags["order_id"] != "o_123" {
+				t.Fatalf("wrong tags: %#v", tags)
+			}
+		} else {
+			untagged++
+		}
+	}
+	if tagged != 1 || untagged != 1 {
+		t.Fatalf("want one tagged and one untagged row, got %d/%d", tagged, untagged)
+	}
+}
+
+func TestNestedTagScopesMergeInnerWins(t *testing.T) {
+	outer := WithTags(context.Background(), map[string]string{"order_id": "o_1", "user_id": "u_9"})
+	inner := WithTags(outer, map[string]string{"order_id": "o_2", "plan": "pro"})
+	got, _ := json.Marshal(TagsFrom(inner))
+	if string(got) != `{"order_id":"o_2","plan":"pro","user_id":"u_9"}` {
+		t.Fatalf("inner scope: %s", got)
+	}
+	if TagsFrom(outer)["order_id"] != "o_1" {
+		t.Fatal("the outer scope must be unchanged by the inner one")
+	}
+}
+
+func TestTagLimitsDropAndWarnOnce(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	tooMany := map[string]string{}
+	for i := 0; i < 20; i++ {
+		tooMany[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	if n := len(TagsFrom(WithTags(context.Background(), tooMany))); n != MaxTags {
+		t.Fatalf("want %d tags kept, got %d", MaxTags, n)
+	}
+	WithTags(context.Background(), tooMany)
+	if c := strings.Count(logged.String(), "more than 16"); c != 1 {
+		t.Fatalf("want one warning, got %d: %s", c, logged.String())
+	}
+	got := TagsFrom(WithTags(context.Background(), map[string]string{
+		strings.Repeat("k", 65): "v", "": "v", "ok": strings.Repeat("x", 257), "fine": strings.Repeat("x", 256),
+	}))
+	if len(got) != 1 || got["fine"] == "" {
+		t.Fatalf("over-long key and value must be dropped, got %#v", got)
+	}
+}
+
+func TestDifferentlyTaggedCallsOnOneLineStaySeparateRows(t *testing.T) {
+	CostProcessor.Clear()
+	for _, order := range []string{"o_1", "o_2", "o_1"} {
+		ctx := WithTags(context.Background(), map[string]string{"order_id": order})
+		TracedLLMCallCtx(ctx, "gpt-4o-mini", 10, 5, CallInfo{})
+	}
+	calls := map[string]float64{}
+	for _, row := range captureRows(t) {
+		calls[row["tags"].(map[string]any)["order_id"].(string)] = row["calls"].(float64)
+	}
+	if calls["o_1"] != 2 || calls["o_2"] != 1 || len(calls) != 2 {
+		t.Fatalf("rows merged across tag sets: %#v", calls)
+	}
+}
+
+func TestPushEventSendsAgentAndTagsOnlyWhenSet(t *testing.T) {
+	bare := captureEvent(t, context.Background(), EventOptions{})
+	if _, ok := bare["agent"]; ok {
+		t.Fatalf("agent must be omitted when unset: %#v", bare)
+	}
+	if _, ok := bare["tags"]; ok {
+		t.Fatalf("tags must be omitted when unset: %#v", bare)
+	}
+	full := captureEvent(t, context.Background(), EventOptions{
+		Agent: "/app/agent.go", Tags: map[string]string{"order_id": "o_5"},
+	})
+	if full["agent"] != "/app/agent.go" || full["tags"].(map[string]any)["order_id"] != "o_5" {
+		t.Fatalf("agent/tags missing: %#v", full)
+	}
+}
+
+func TestPushEventPicksUpTheScopeTagsUnlessGivenItsOwn(t *testing.T) {
+	ctx := WithTags(context.Background(), map[string]string{"order_id": "o_123"})
+	if got := captureEvent(t, ctx, EventOptions{})["tags"].(map[string]any); got["order_id"] != "o_123" {
+		t.Fatalf("scope tags not picked up: %#v", got)
+	}
+	own := captureEvent(t, ctx, EventOptions{Tags: map[string]string{"x": "y"}})["tags"].(map[string]any)
+	if len(own) != 1 || own["x"] != "y" {
+		t.Fatalf("explicit tags must replace the scope's: %#v", own)
+	}
+}
+
+func TestTracedHTTPClientRowCarriesTheRequestContextTags(t *testing.T) {
+	CostProcessor.Clear()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"gpt-4o-mini","usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	}))
+	defer srv.Close()
+	ctx := WithTags(context.Background(), map[string]string{"order_id": "o_7"})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, nil)
+	resp, err := TracedHTTPClient(ProviderOpenAI).Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	for k := range CostProcessor.Snapshot() {
+		if k.Tags != `{"order_id":"o_7"}` {
+			t.Fatalf("transport row lost the ctx tags: %q", k.Tags)
+		}
+		return
+	}
+	t.Fatal("nothing recorded")
 }

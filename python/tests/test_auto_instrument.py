@@ -13,7 +13,7 @@ def test_on_start_backfills_code_location_for_auto_instrumented_spans():
         span.set_attribute("gen_ai.usage.output_tokens", 50)
 
     assert len(COST_PROCESSOR.buckets) == 1
-    (chain, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (chain, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     filepath, lineno, function = chain[-1]  # Get the leaf of the chain
     assert filepath.endswith("test_auto_instrument.py")
     assert function == "test_on_start_backfills_code_location_for_auto_instrumented_spans"
@@ -28,7 +28,7 @@ def test_on_end_records_gen_ai_usage_attributes():
         span.set_attribute("gen_ai.usage.input_tokens", 1000)
         span.set_attribute("gen_ai.usage.output_tokens", 1000)
 
-    (_, model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_, model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert model == "gpt-4o-mini"
     assert bucket.calls == 1
     assert bucket.input_tokens == 1000
@@ -58,7 +58,7 @@ def test_an_anthropic_shaped_span_carries_its_cache_counts_alongside():
         span.set_attribute("gen_ai.usage.cache_read_input_tokens", 117760)
         span.set_attribute("gen_ai.usage.cache_creation_input_tokens", 3000)
 
-    (_, model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_, model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert model == "claude-3-5-sonnet-20241022"
     assert bucket.input_tokens == 8241
     assert bucket.output_tokens == 400
@@ -82,7 +82,7 @@ def test_an_openai_shaped_span_has_the_cached_tokens_subtracted_back_out():
         span.set_attribute("gen_ai.usage.completion_tokens", 500)
         span.set_attribute("gen_ai.usage.cached_tokens", 9600)
 
-    (_, model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_, model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert model == "gpt-4o"
     assert bucket.input_tokens == 400  # 10000 - 9600
     assert bucket.cache_read_tokens == 9600
@@ -97,7 +97,7 @@ def test_a_span_without_cache_attributes_reports_no_cache_tokens():
         span.set_attribute("gen_ai.usage.input_tokens", 100)
         span.set_attribute("gen_ai.usage.output_tokens", 50)
 
-    (_, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert bucket.cache_read_tokens == 0
     assert bucket.cache_creation_tokens == 0
 
@@ -114,7 +114,7 @@ def test_a_cache_only_span_still_becomes_a_row():
         span.set_attribute("gen_ai.usage.output_tokens", 0)
         span.set_attribute("gen_ai.usage.cache_read_input_tokens", 1000)
 
-    (_, model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_, model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert model == "claude-3-opus-20240229"
     assert bucket.calls == 1
     assert bucket.cache_read_tokens == 1000

@@ -17,7 +17,7 @@ def test_resolves_full_chain_not_just_immediate_caller():
     outer()
 
     assert len(COST_PROCESSOR.buckets) == 1
-    (chain, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (chain, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     functions = [f[2] for f in chain]
     assert functions[-1] == "inner"  # leaf: the actual call site
     assert "outer" in functions      # the frame above it is still captured
@@ -37,7 +37,7 @@ def test_chain_caps_at_five_frames_keeping_the_leaf_end():
 
     L0()
 
-    (chain, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (chain, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     functions = [f[2] for f in chain]
     assert len(functions) == 5
     assert functions[-1] == "L5"   # leaf always kept
@@ -49,7 +49,7 @@ def test_resolves_user_code_line_not_framework():
     build_graph().invoke({"question": "q", "plan": "", "answer": ""})
 
     assert COST_PROCESSOR.buckets, "expected at least one attributed span"
-    for (chain, _model), bucket in COST_PROCESSOR.buckets.items():
+    for (chain, _model, _tags), bucket in COST_PROCESSOR.buckets.items():
         filepath, lineno, _function = chain[-1]  # Get the leaf of the chain
         assert filepath.endswith("langgraph_spike.py"), f"attributed to framework code: {filepath}"
         assert lineno > 0
@@ -108,7 +108,7 @@ def test_captures_a_few_lines_of_source_around_the_traced_line():
     traced_llm_call("gpt-4o-mini", input_tokens=10, output_tokens=10)  # the traced line
     line_after_marker = "line after"             # noqa: F841 (line +1)
 
-    (chain, _model), _bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (chain, _model, _tags), _bucket = next(iter(COST_PROCESSOR.buckets.items()))
     filepath, lineno, _function = chain[-1]
 
     start, text = SNIPPETS[(filepath, lineno)]
@@ -128,7 +128,7 @@ def test_latency_is_recorded_only_when_the_caller_measured_it():
     for latency in (2000.0, None):
         traced_llm_call("gpt-4o-mini", input_tokens=100, output_tokens=50, latency_ms=latency)
 
-    (_chain, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_chain, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert bucket.calls == 2
     assert bucket.latency_ms == 2000.0
 
@@ -141,7 +141,7 @@ def test_an_untimed_call_claims_no_latency_rather_than_a_tiny_one():
     COST_PROCESSOR.buckets.clear()
     traced_llm_call("gpt-4o-mini", input_tokens=10, output_tokens=5)
 
-    (_chain, _model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (_chain, _model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert bucket.latency_ms == 0
 
 
@@ -151,7 +151,7 @@ def test_bucket_accumulates_model_tokens_and_latency():
     for input_tokens, output_tokens in [(10, 5), (20, 8)]:
         traced_llm_call("gpt-4o-mini", input_tokens=input_tokens, output_tokens=output_tokens)
 
-    (chain, model), bucket = next(iter(COST_PROCESSOR.buckets.items()))
+    (chain, model, _tags), bucket = next(iter(COST_PROCESSOR.buckets.items()))
     assert model == "gpt-4o-mini"
     assert chain[-1][2] == "test_bucket_accumulates_model_tokens_and_latency"
     assert bucket.calls == 2
@@ -173,7 +173,7 @@ def test_one_line_calling_two_models_keeps_two_buckets():
         traced_llm_call(model, input_tokens=1000, output_tokens=1000)
 
     assert len(COST_PROCESSOR.buckets) == 2
-    by_model = {model: b for (_chain, model), b in COST_PROCESSOR.buckets.items()}
+    by_model = {model: b for (_chain, model, _tags), b in COST_PROCESSOR.buckets.items()}
     assert set(by_model) == {"gpt-4o-mini", "gpt-4o"}
     # Each bucket holds only its own model's tokens, not both summed together.
     assert by_model["gpt-4o-mini"].input_tokens == 1000

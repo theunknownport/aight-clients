@@ -136,8 +136,59 @@ Map<String, Object> response = Remote.pushEvent(
 and the environment's API key; `withX(...)` overrides any of them. `response`
 is the ingest endpoint's own report — `{"ingested": n, "results": [...]}`,
 where each result carries the `match_type` it resolved to
-(`EXPLICIT` / `IMPLICIT` / `UNMATCHED`) and a `confidence_score`. Without a
+(`EXPLICIT` / `DECLARED` / `TAGGED` / `IMPLICIT` / `UNMATCHED`) and a `confidence_score`. Without a
 trace id the event still lands, matched by a time-window guess.
+
+## Matching business events to agents
+
+Give the server something to tie an event to the agent that produced it. Open
+a tags scope with the business keys you already have, and declare the agent on
+the event:
+
+```java
+try (var t = Tracing.tags(Map.of("order_id", order.id(), "user_id", user.id()))) {
+    Tracing.tracedLlmCall(model, inputTokens, outputTokens);    // the row carries the tags
+    Remote.pushEvent("checkout.completed", 49.0,
+            EventOptions.defaults().withAgent("Agent.java"));    // so does the event
+}
+```
+
+The server tries four signals, strongest first, and the first one that points
+at exactly one agent wins. The result's `match_type` says which:
+
+1. `trace_id` (`EXPLICIT`): the event names a trace id that one agent's spans
+   also carry.
+2. Declared agent (`DECLARED`): the event names its `agent`, which is the
+   same string as the first chain frame's `filepath` on that agent's span rows
+   and the `filepath` `pushValue` uses. In this SDK that is the calling
+   file's **basename** (`Agent.java`); see [Java's filepath
+   limitation](#javas-filepath-limitation).
+3. Shared tag (`TAGGED`): the event carries a tag whose exact `key=value` also
+   sits on span rows, and every span carrying it belongs to one agent.
+4. Time window (`IMPLICIT`), on the Scale plan only: the one agent that ran in
+   the 15 minutes before the event. It is a guess, and its confidence drops as
+   the gap grows.
+
+Otherwise the event is stored `UNMATCHED`. Collected (external) agents are
+never matched by any of these signals. Their value is reported, not matched.
+
+Tags only help when the same `key=value` appears on **both** a span and the
+event: a tag on the event alone, or only on spans, matches nothing. A tag that
+two agents' spans both carry (a `user_id` both of them served) is ambiguous and
+is not matched. It says nothing about which agent earned the event, so the
+server falls through to the next signal. Values are strings (numbers are
+stringified). The limits are 16 tags, keys up to 64 characters, values up to
+256, and no empty keys. Tags outside them are dropped with a one-time warning
+and never raised into your code. The SDK sends calls on the same line under
+different tags as separate rows, but the server keeps spend per line, not per
+tag. A tag says which agent ran a unit of work, not what that unit cost.
+
+`pushEvent` sends `agent` and `tags` only when set. `withTags(...)` replaces
+the scope's tags for that event; leave it unset and the current thread's scope
+is used. The scope is a `ThreadLocal`, closed by try-with-resources; it nests and
+merges (inner wins). Work handed to another thread does not inherit it, so open a
+scope there too. The traced `HttpClient` reads it on the calling thread, so
+`sendAsync` keeps it. `Tracing.currentTags()` reads the current set.
 
 ## Java's filepath limitation
 

@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -209,5 +210,105 @@ class RemoteTest {
         assertTrue(body.get().contains("\"trace_id\":\"\""), body.get());
         assertTrue(body.get().matches(".*\"event_id\":\"[0-9a-f\\-]{36}\".*"), body.get());
         assertTrue(body.get().matches(".*\"timestamp\":1\\.7\\d+E9.*"), body.get());
+    }
+
+    // ---- Span tags and the event's agent/tags (matching signals) ----
+
+    private String pushSpans() throws Exception {
+        body.set(null);
+        Remote.push(Tracing.COST_PROCESSOR, "aight_test_key", spansUrl);
+        return body.get();
+    }
+
+    @Test
+    void tagsLandOnRowsInsideTheScopeAndNotOutside() throws Exception {
+        Tracing.COST_PROCESSOR.clear();
+        try (var t = Tracing.tags(Map.of("order_id", "o_123", "n", 7))) {
+            Tracing.tracedLlmCall("gpt-4o-mini", 10, 5);
+        }
+        Tracing.tracedLlmCall("gpt-4o-mini", 10, 5);
+
+        String sent = pushSpans();
+        assertEquals(1, sent.split("\"tags\":", -1).length - 1, sent);
+        assertTrue(sent.contains("\"order_id\":\"o_123\""), sent);
+        assertTrue(sent.contains("\"n\":\"7\""), "numbers are stringified: " + sent);
+    }
+
+    @Test
+    void nestedTagScopesMergeInnerWins() {
+        try (var outer = Tracing.tags(Map.of("order_id", "o_1", "user_id", "u_9"))) {
+            try (var inner = Tracing.tags(Map.of("order_id", "o_2", "plan", "pro"))) {
+                assertEquals(Map.of("order_id", "o_2", "user_id", "u_9", "plan", "pro"), Tracing.currentTags());
+            }
+            assertEquals(Map.of("order_id", "o_1", "user_id", "u_9"), Tracing.currentTags());
+        }
+        assertEquals(Map.of(), Tracing.currentTags());
+    }
+
+    @Test
+    void tagLimitsDropAndWarnOnceNeverThrow() {
+        List<String> warnings = new java.util.ArrayList<>();
+        java.util.logging.Logger log = java.util.logging.Logger.getLogger("studio.aight.sdk");
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override public void publish(java.util.logging.LogRecord r) { warnings.add(r.getMessage()); }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        log.addHandler(handler);
+        try {
+            Map<String, String> tooMany = new java.util.HashMap<>();
+            for (int i = 0; i < 20; i++) {
+                tooMany.put("k" + i, "v");
+            }
+            try (var t = Tracing.tags(tooMany)) {
+                assertEquals(16, Tracing.currentTags().size());
+            }
+            try (var t = Tracing.tags(tooMany)) {
+                // second time: no second warning
+            }
+            assertEquals(1, warnings.stream().filter(w -> w.contains("more than 16")).count(), warnings.toString());
+            try (var t = Tracing.tags(Map.of("k".repeat(65), "v", "", "v", "ok", "x".repeat(257), "fine", "x".repeat(256)))) {
+                assertEquals(Map.of("fine", "x".repeat(256)), Tracing.currentTags());
+            }
+        } finally {
+            log.removeHandler(handler);
+        }
+    }
+
+    @Test
+    void differentlyTaggedCallsOnOneLineStaySeparateRows() throws Exception {
+        Tracing.COST_PROCESSOR.clear();
+        for (String order : List.of("o_1", "o_2", "o_1")) {
+            try (var t = Tracing.tags(Map.of("order_id", order))) {
+                Tracing.tracedLlmCall("gpt-4o-mini", 10, 5);
+            }
+        }
+        assertEquals(2, Tracing.COST_PROCESSOR.buckets().size());
+        String sent = pushSpans();
+        assertTrue(sent.contains("\"calls\":2"), sent);
+        assertTrue(sent.contains("\"calls\":1"), sent);
+    }
+
+    @Test
+    void pushEventSendsAgentAndTagsOnlyWhenSet() throws Exception {
+        Remote.pushEvent("signup", 0.0, EventOptions.defaults().withApiKey("k").withUrl(url));
+        assertFalse(body.get().contains("\"agent\""), body.get());
+        assertFalse(body.get().contains("\"tags\""), body.get());
+
+        Remote.pushEvent("signup", 0.0, EventOptions.defaults().withApiKey("k").withUrl(url)
+                .withAgent("Agent.java").withTags(Map.of("order_id", 5)));
+        assertTrue(body.get().contains("\"agent\":\"Agent.java\""), body.get());
+        assertTrue(body.get().contains("\"tags\":{\"order_id\":\"5\"}"), body.get());
+    }
+
+    @Test
+    void pushEventPicksUpTheScopeTagsUnlessGivenItsOwn() throws Exception {
+        try (var t = Tracing.tags(Map.of("order_id", "o_123"))) {
+            Remote.pushEvent("checkout", 49.0, EventOptions.defaults().withApiKey("k").withUrl(url));
+            assertTrue(body.get().contains("\"tags\":{\"order_id\":\"o_123\"}"), body.get());
+            Remote.pushEvent("checkout", 49.0, EventOptions.defaults().withApiKey("k").withUrl(url)
+                    .withTags(Map.of("x", "y")));
+            assertTrue(body.get().contains("\"tags\":{\"x\":\"y\"}"), body.get());
+        }
     }
 }

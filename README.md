@@ -248,7 +248,9 @@ X-Aight-Sdk-Version: 0.1.0          # optional, ditto
     "cache_creation_tokens": 800,    # optional, at the cache-write rate
     "latency_ms": 820.5,             # optional, the TOTAL over this row's
                                      # calls in ms, not a per-call average
-    "trace_id": "..."                # optional, for explicit event matching
+    "trace_id": "...",               # optional, for explicit event matching
+    "tags": { "order_id": "o_123" }  # optional, business keys for TAGGED
+                                     # matching; omitted when empty
   }
 ]
 ```
@@ -315,10 +317,26 @@ Content-Type: application/json
   "timestamp": 1758307200.0,          # required, Unix seconds
   "value": 49.0,                      # optional, default 0
   "currency": "USD",                  # optional, default USD
-  "trace_id": "..."                   # optional — an explicit match; without
-}                                     # it the server guesses by time window
+  "trace_id": "...",                  # optional — an explicit match
+  "agent": "/app/agent.py",           # optional — the agent's chain[0] filepath
+  "tags": { "order_id": "o_123" }     # optional — matched against span tags
+}
 ```
+
+`tags`, on a span row or an event, is a flat object of strings: at most 16
+entries, keys 1-64 characters, values at most 256. The server rejects the
+whole push with a 400 past those limits, so every SDK drops the offending tags
+(with a one-time warning) before sending. The SDK sends rows with different
+tags separately, but the server keeps spend per line, so a tag identifies the
+agent behind a unit of work and not its cost.
+
+The server matches an event to an agent in this order and stops at the first
+signal that names exactly one agent: `trace_id` (`EXPLICIT`), declared `agent`
+(`DECLARED`), a shared tag (`TAGGED`), and, on the Scale plan only, the time
+window (`IMPLICIT`), which is a guess. A tag only matches when the same
+`key=value` is on both an event and a span, and a tag found on two agents'
+spans is ambiguous and matches nothing. External agents are never matched.
 
 A single object or a list of them. Responds `{"ingested": n, "results":
 [...]}`, where each result carries the `match_type`
-(`EXPLICIT`/`IMPLICIT`/`UNMATCHED`) and `confidence_score` it resolved to.
+(`EXPLICIT`/`DECLARED`/`TAGGED`/`IMPLICIT`/`UNMATCHED`) and `confidence_score` it resolved to.

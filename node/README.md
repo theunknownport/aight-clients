@@ -163,8 +163,60 @@ await pushEvent('checkout.completed', 49.0, { traceId: runId })
 ```
 
 `pushEvent` returns the server's response, `{ ingested, results }`, where each
-result carries the `match_type` it resolved to (`EXPLICIT` / `IMPLICIT` /
-`UNMATCHED`) and a confidence score.
+result carries the `match_type` it resolved to (`EXPLICIT` / `DECLARED` /
+`TAGGED` / `IMPLICIT` / `UNMATCHED`) and a confidence score.
+
+## Matching business events to agents
+
+Give the server something to tie an event to the agent that produced it. Run
+the work inside `withTags` with the business keys you already have, and declare
+the agent on the event:
+
+```js
+import { fileURLToPath } from 'node:url'
+import { withTags, tracedLlmCall, pushEvent } from 'aight-sdk'
+
+const AGENT = fileURLToPath(import.meta.url) // the file that calls tracedLlmCall
+
+await withTags({ orderId: order.id, userId: user.id }, async () => {
+  tracedLlmCall(model, inputTokens, outputTokens)              // rows carry the tags
+  await pushEvent('checkout.completed', 49.0, { agent: AGENT }) // so does the event
+})
+```
+
+The server tries four signals, strongest first, and the first one that points
+at exactly one agent wins. The result's `match_type` says which:
+
+1. `trace_id` (`EXPLICIT`): the event names a trace id that one agent's spans
+   also carry.
+2. Declared agent (`DECLARED`): the event names its `agent`, which is the
+   same string as the first chain frame's `filepath` on that agent's span rows
+   and the `filepath` `pushValue` uses. This SDK sends a one-frame chain, so
+   that is the file that called `tracedLlmCall` (or the auto-instrumented client).
+3. Shared tag (`TAGGED`): the event carries a tag whose exact `key=value` also
+   sits on span rows, and every span carrying it belongs to one agent.
+4. Time window (`IMPLICIT`), on the Scale plan only: the one agent that ran in
+   the 15 minutes before the event. It is a guess, and its confidence drops as
+   the gap grows.
+
+Otherwise the event is stored `UNMATCHED`. Collected (external) agents are
+never matched by any of these signals. Their value is reported, not matched.
+
+Tags only help when the same `key=value` appears on **both** a span and the
+event: a tag on the event alone, or only on spans, matches nothing. A tag that
+two agents' spans both carry (a `user_id` both of them served) is ambiguous and
+is not matched. It says nothing about which agent earned the event, so the
+server falls through to the next signal. Values are strings (numbers are
+stringified). The limits are 16 tags, keys up to 64 characters, values up to
+256, and no empty keys. Tags outside them are dropped with a one-time warning
+and never raised into your code. The SDK sends calls on the same line under
+different tags as separate rows, but the server keeps spend per line, not per
+tag. A tag says which agent ran a unit of work, not what that unit cost.
+
+`pushEvent` sends `agent` and `tags` only when set. `{ tags }` replaces the
+scope's tags for that event; leave it out and the active `withTags` scope is
+used. `withTags` is AsyncLocalStorage-based, so it survives `await`, nests and
+merges (inner wins), and returns what your function returns.
 
 ## Local-only mode
 

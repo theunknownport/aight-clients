@@ -119,6 +119,62 @@ also the way to report value for an agent you did not write — pass the agent i
 the collector uses as the filepath. See [External
 agents](#external-agents) below.
 
+## Matching business events to agents
+
+Report a business event (a checkout, a signup, a ticket closed) with
+`push_event`, and give the server something to tie it to the agent that
+produced it. Tag the work with the business keys you already have, and declare
+the agent:
+
+```python
+import os
+import aight.tracing as aight
+from aight.remote import push_event
+
+AGENT = os.path.abspath(__file__)  # must equal chain[0] on this agent's rows — see 2. below
+
+with aight.tags(order_id=order.id, user_id=user.id):
+    aight.traced_llm_call(model, input_tokens=..., output_tokens=...)  # rows carry the tags
+    push_event("checkout.completed", value=49.0, agent=AGENT)        # so does the event
+```
+
+The server tries four signals, strongest first, and the first one that points
+at exactly one agent wins. The result's `match_type` says which:
+
+1. `trace_id` (`EXPLICIT`): the event names a trace id that one agent's spans
+   also carry.
+2. Declared agent (`DECLARED`): the event names its `agent`, which is the
+   same string as the first chain frame's `filepath` on that agent's span rows
+   and the `filepath` `push_value` uses. In this SDK the first frame is the
+   *outermost* of up to five user-code frames on the stack, so check the path
+   on a pushed row (or `COST_PROCESSOR.buckets`) instead of assuming it is the
+   file you're in.
+3. Shared tag (`TAGGED`): the event carries a tag whose exact `key=value` also
+   sits on span rows, and every span carrying it belongs to one agent.
+4. Time window (`IMPLICIT`), on the Scale plan only: the one agent that ran in
+   the 15 minutes before the event. It is a guess, and its confidence drops as
+   the gap grows.
+
+Otherwise the event is stored `UNMATCHED`. Collected (external) agents are
+never matched by any of these signals. Their value is reported, not matched.
+
+Tags only help when the same `key=value` appears on **both** a span and the
+event: a tag on the event alone, or only on spans, matches nothing. A tag that
+two agents' spans both carry (a `user_id` both of them served) is ambiguous and
+is not matched. It says nothing about which agent earned the event, so the
+server falls through to the next signal. Values are strings (numbers are
+stringified). The limits are 16 tags, keys up to 64 characters, values up to
+256, and no empty keys. Tags outside them are dropped with a one-time warning
+and never raised into your code. The SDK sends calls on the same line under
+different tags as separate rows, but the server keeps spend per line, not per
+tag. A tag says which agent ran a unit of work, not what that unit cost.
+
+`push_event` sends `agent` and `tags` only when set. `tags=` replaces the
+scope's tags for that event; leave it out and the active `with aight.tags(...)`
+scope is used. `with TraceContext(...)` supplies `trace_id`.
+`aight.tags` nests and merges (inner wins) and is contextvars-based, so it
+follows async tasks; auto-instrumented spans take the scope they were opened in.
+
 ## Local-only mode
 
 Skip `push()` and call `COST_PROCESSOR.report()` instead — a plain-text
