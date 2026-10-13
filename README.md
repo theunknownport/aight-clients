@@ -312,8 +312,9 @@ Content-Type: application/json
 `tags`, on a span row or an event, is a flat object of strings: at most 16
 entries, keys 1-64 characters, values at most 256. The server rejects the
 whole push with a 400 past those limits, so every SDK drops the offending tags
-(with a one-time warning) before sending. Rows with different tags are separate
-rows, never merged.
+(with a one-time warning) before sending. The SDK sends rows with different
+tags separately; the server still keeps spend per line, so tags identify the
+agent behind a unit of work rather than its cost.
 
 The server matches an event to an agent in this order and stops at the first
 signal that names exactly one agent: `trace_id` (`EXPLICIT`), declared `agent`

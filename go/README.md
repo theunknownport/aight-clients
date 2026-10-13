@@ -186,9 +186,9 @@ is **not** matched — it says nothing about which agent earned the event, so th
 server falls through to the next signal rather than pick one. Values are
 strings (numbers are stringified); at most 16 tags, keys up to 64 characters,
 values up to 256, and no empty keys. Anything else is dropped with a one-time
-warning — never raised into your code. Calls on the same line under different
-tags are kept as separate rows, so a tag is never smeared across another
-order's spend.
+warning — never raised into your code. The SDK sends calls on the same line
+under different tags as separate rows, but the server keeps spend per line, not
+per tag: a tag says which agent ran a unit of work, not what that unit cost.
 
 `PushEventCtx` sends `Agent` and `Tags` only when set. `EventOptions.Tags`
 replaces the ctx's tags for that event; leave it empty and the ctx's `WithTags`
