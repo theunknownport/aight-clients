@@ -10,6 +10,8 @@ import {
   pushEvent,
   autoInstrument,
   DEFAULT_INGEST_URL,
+  withTags,
+  currentTags,
 } from '../src/index.js'
 import { SDK_VERSION } from '../src/remote.js'
 import { snippetFor } from '../src/tracing.js'
@@ -333,4 +335,86 @@ test('autoInstrument degrades to an empty list without the OTel packages', async
   // rather than throwing into an app's startup path.
   const enabled = await autoInstrument()
   assert.deepEqual(enabled, [])
+})
+
+// ---- Span tags and the event's agent/tags (matching signals) ----
+
+test('tags land on rows recorded inside withTags and not outside', async () => {
+  COST_PROCESSOR.buckets.clear()
+  await withTags({ orderId: 'o_123', n: 7 }, async () => {
+    await Promise.resolve() // survives an await
+    tracedLlmCall('gpt-4o-mini', 10, 5)
+  })
+  tracedLlmCall('gpt-4o-mini', 10, 5)
+  const rows = await capturePush()
+  assert.deepEqual(rows.filter((r) => r.tags).map((r) => r.tags), [{ orderId: 'o_123', n: '7' }])
+  assert.equal(rows.filter((r) => !('tags' in r)).length, 1)
+})
+
+test('nested withTags scopes merge, inner wins', () => {
+  withTags({ orderId: 'o_1', userId: 'u_9' }, () => {
+    withTags({ orderId: 'o_2', plan: 'pro' }, () => {
+      assert.deepEqual(currentTags(), { orderId: 'o_2', userId: 'u_9', plan: 'pro' })
+    })
+    assert.deepEqual(currentTags(), { orderId: 'o_1', userId: 'u_9' })
+  })
+  assert.deepEqual(currentTags(), {})
+})
+
+test('tag limits drop extras and warn once, never throw', () => {
+  const originalWarn = console.warn
+  const warnings = []
+  console.warn = (msg) => warnings.push(msg)
+  try {
+    const tooMany = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, 'v']))
+    withTags(tooMany, () => assert.equal(Object.keys(currentTags()).length, 16))
+    withTags(tooMany, () => {})
+    assert.equal(warnings.filter((w) => w.includes('more than 16')).length, 1)
+    withTags({ ['k'.repeat(65)]: 'v', ok: 'x'.repeat(257), fine: 'x'.repeat(256) }, () => {
+      assert.deepEqual(currentTags(), { fine: 'x'.repeat(256) })
+    })
+    assert.equal(warnings.length, 3)
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test('differently-tagged calls on one line stay separate rows', async () => {
+  COST_PROCESSOR.buckets.clear()
+  for (const orderId of ['o_1', 'o_2', 'o_1']) {
+    withTags({ orderId }, () => tracedLlmCall('gpt-4o-mini', 10, 5))
+  }
+  const rows = await capturePush()
+  const byOrder = Object.fromEntries(rows.map((r) => [r.tags.orderId, r.calls]))
+  assert.deepEqual(byOrder, { o_1: 2, o_2: 1 })
+})
+
+test('pushEvent sends agent and tags only when set', async () => {
+  const bare = await capturePushEvent('signup', 0, { apiKey: 'k' })
+  assert.ok(!('agent' in bare.sent.body) && !('tags' in bare.sent.body))
+  const full = await capturePushEvent('signup', 0, { apiKey: 'k', agent: '/app/agent.js', tags: { orderId: 5 } })
+  assert.equal(full.sent.body.agent, '/app/agent.js')
+  assert.deepEqual(full.sent.body.tags, { orderId: '5' })
+})
+
+test('pushEvent picks up the scope tags unless given its own', async () => {
+  await withTags({ orderId: 'o_123' }, async () => {
+    const scoped = await capturePushEvent('checkout', 49, { apiKey: 'k' })
+    assert.deepEqual(scoped.sent.body.tags, { orderId: 'o_123' })
+    const own = await capturePushEvent('checkout', 49, { apiKey: 'k', tags: { x: 'y' } })
+    assert.deepEqual(own.sent.body.tags, { x: 'y' })
+  })
+})
+
+test('an auto-instrumented span keeps the tags of the scope it started in', () => {
+  COST_PROCESSOR.buckets.clear()
+  const span = { attributes: {}, setAttribute(k, v) { this.attributes[k] = v } }
+  withTags({ orderId: 'o_7' }, () => COST_PROCESSOR.onStart(span))
+  Object.assign(span.attributes, {
+    'gen_ai.request.model': 'gpt-4o-mini',
+    'gen_ai.usage.input_tokens': 10,
+    'gen_ai.usage.output_tokens': 5,
+  })
+  COST_PROCESSOR.onEnd(span) // ends outside the scope
+  assert.deepEqual(COST_PROCESSOR.entries()[0].tags, { orderId: 'o_7' })
 })

@@ -2,7 +2,7 @@
 // Uses the built-in fetch (Node >=18) — no HTTP client dependency.
 import { randomUUID } from 'node:crypto'
 
-import { snippetFor } from './tracing.js'
+import { cleanTags, currentTags, snippetFor } from './tracing.js'
 
 export const DEFAULT_INGEST_URL = 'https://api.aight.studio/api/ingest/spans'
 
@@ -100,6 +100,8 @@ export async function push(costProcessor, { apiKey, url } = {}) {
     // the server matches the two EXPLICITLY instead of guessing by time window.
     // '' means nobody set one — not a match, rather than a wrong one.
     trace_id: e.traceId,
+    // Omitted, not sent empty, when no withTags() scope was active.
+    tags: Object.keys(e.tags).length ? e.tags : undefined,
   }))
   if (rows.length === 0) return
 
@@ -144,6 +146,15 @@ export async function pushValue(valueByFile, { apiKey, url } = {}) {
  * that run as an EXPLICIT match. Without it the server falls back to its
  * time-window guess, which is the weakest data in the system.
  *
+ * `agent` names the agent that produced the event: the same file path as the
+ * chain frame on its span rows, and the filepath pushValue uses. The server
+ * matches an event to a declared agent before it falls back to shared tags or
+ * the time window.
+ *
+ * `tags` defaults to the active withTags() scope. An event matches on a tag
+ * only when the same key=value is also on a span, and only when one agent's
+ * spans carry it — a tag two agents share is ambiguous and is not matched.
+ *
  * Returns the ingest endpoint's JSON response, {"ingested": n, "results": [...]}
  * — each result carries the match_type ("EXPLICIT"/"IMPLICIT"/"UNMATCHED") it
  * resolved to, plus its confidence_score. It is not the match result itself.
@@ -151,7 +162,7 @@ export async function pushValue(valueByFile, { apiKey, url } = {}) {
 export async function pushEvent(
   eventName,
   value = 0,
-  { currency = 'USD', eventId, traceId = '', timestamp, apiKey, url } = {}
+  { currency = 'USD', eventId, traceId = '', timestamp, apiKey, url, agent, tags } = {}
 ) {
   const key = requireKey(apiKey)
   const endpoint =
@@ -166,6 +177,9 @@ export async function pushEvent(
     timestamp: timestamp ?? Date.now() / 1000,
     trace_id: traceId,
   }
+  if (agent) event.agent = agent
+  const eventTags = tags ? cleanTags(tags) : currentTags()
+  if (Object.keys(eventTags).length) event.tags = eventTags
   const res = await send(endpoint, key, event)
   return res.json()
 }

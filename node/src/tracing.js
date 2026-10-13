@@ -2,6 +2,7 @@
 // walking the call stack past this file and past anything in node_modules
 // (a reasonable proxy for "framework code" in Node — your own code is
 // essentially never installed there). Mirrors python/aight/tracing.py.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -31,6 +32,66 @@ function resolveCallerFrame() {
     return { filepath, lineno: Number(lineno), function: fn || '<anonymous>' }
   }
   return { filepath: '?', lineno: 0, function: '?' }
+}
+
+// Span tags: business keys (orderId, userId, ...) the server can match a
+// business event against when the event shares one. Limits match the ingest
+// validator, so the SDK drops what the server would refuse instead of the whole
+// push failing on it. Mirrors tracing.py's tags().
+export const MAX_TAGS = 16
+export const MAX_TAG_KEY = 64
+export const MAX_TAG_VALUE = 256
+
+const tagStore = new AsyncLocalStorage()
+const warned = new Set()
+
+// Once per kind per process: a hot loop over a bad tag would otherwise print
+// the same line on every call.
+function warnOnce(kind, message) {
+  if (warned.has(kind)) return
+  warned.add(kind)
+  console.warn(`aight: ${message}`)
+}
+
+/** Stringify keys and values and drop what the server would refuse. Never
+ * throws: a bad tag costs you that tag, not your agent's request. */
+export function cleanTags(tags) {
+  const out = {}
+  let count = 0
+  for (const [rawKey, rawValue] of Object.entries(tags || {})) {
+    const key = String(rawKey)
+    const value = String(rawValue)
+    if (key.length > MAX_TAG_KEY) {
+      warnOnce('key', `tag key longer than ${MAX_TAG_KEY} chars dropped: ${key.slice(0, 20)}...`)
+      continue
+    }
+    if (value.length > MAX_TAG_VALUE) {
+      warnOnce('value', `tag "${key}" dropped: value longer than ${MAX_TAG_VALUE} chars`)
+      continue
+    }
+    if (!(key in out) && count >= MAX_TAGS) {
+      warnOnce('count', `more than ${MAX_TAGS} tags; extras dropped`)
+      continue
+    }
+    if (!(key in out)) count++
+    out[key] = value
+  }
+  return out
+}
+
+/** The active withTags() scope, or {} outside one. */
+export function currentTags() {
+  return { ...(tagStore.getStore() || {}) }
+}
+
+/**
+ * Attach business keys to every call recorded while `fn` runs, including
+ * across awaits: `withTags({ orderId: 'o_123' }, async () => { ... })`. Nests
+ * and merges, inner wins. Returns whatever `fn` returns. pushEvent() inside the
+ * scope picks the same tags up when you pass none.
+ */
+export function withTags(tags, fn) {
+  return tagStore.run(cleanTags({ ...currentTags(), ...tags }), fn)
 }
 
 // How many source lines to grab on each side of an attributed line, for the
@@ -153,6 +214,8 @@ class Bucket {
     // trace id and once without is still the traced run. '' means nobody set
     // one, which the server reads as "no explicit match available".
     this.traceId = ''
+    // Part of the bucket key, copied here so entries() can hand it back.
+    this.tags = {}
   }
 }
 
@@ -178,12 +241,19 @@ export class CostByLineProcessor {
     cacheReadTokens = 0,
     cacheCreationTokens = 0,
     latencyMs = 0,
-    traceId = ''
+    traceId = '',
+    tags = {}
   ) {
-    const key = `${filepath}\x00${lineno}\x00${fn}\x00${model}`
+    // Tags are in the key for the same reason the model is: merging order
+    // o_1's calls into order o_2's row would hand the server one row it can
+    // only match to one of them. Sorted so key order doesn't split a bucket;
+    // JSON escapes \x00, so the separator split in entries() stays safe.
+    const tagKey = JSON.stringify(Object.entries(tags).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+    const key = `${filepath}\x00${lineno}\x00${fn}\x00${model}\x00${tagKey}`
     let bucket = this.buckets.get(key)
     if (!bucket) {
       bucket = new Bucket()
+      bucket.tags = { ...tags }
       this.buckets.set(key, bucket)
     }
     bucket.calls += 1
@@ -236,6 +306,9 @@ export class CostByLineProcessor {
     span.setAttribute('code.chain.0.filepath', filepath)
     span.setAttribute('code.chain.0.lineno', lineno)
     span.setAttribute('code.chain.0.function', fn)
+    // Read at start, so the span keeps the scope it was opened in.
+    const tags = currentTags()
+    if (Object.keys(tags).length) span.setAttribute('aight.tags', JSON.stringify(tags))
   }
 
   onEnd(span) {
@@ -247,7 +320,8 @@ export class CostByLineProcessor {
     const lineno = Number(attrs['code.chain.0.lineno'] || 0)
     const fn = attrs['code.chain.0.function'] || '?'
     captureSnippet(filepath, lineno)
-    this.record(filepath, lineno, fn, model, ...usage, 0, attrs['aight.trace_id'] || '')
+    const tags = attrs['aight.tags'] ? JSON.parse(attrs['aight.tags']) : {}
+    this.record(filepath, lineno, fn, model, ...usage, 0, attrs['aight.trace_id'] || '', tags)
   }
 
   shutdown() {}
@@ -330,7 +404,8 @@ export function tracedLlmCall(
     cacheReadTokens,
     cacheCreationTokens,
     latencyMs,
-    traceId
+    traceId,
+    currentTags()
   )
 }
 
