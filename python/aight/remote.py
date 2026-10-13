@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 
 from . import __version__
-from .tracing import SNIPPETS, current_trace_id
+from .tracing import SNIPPETS, clean_tags, current_tags, current_trace_id
 
 DEFAULT_INGEST_URL = "https://api.aight.studio/api/ingest/spans"
 
@@ -59,9 +59,10 @@ def _frame_dict(filepath: str, lineno: int, function: str) -> dict:
 
 
 def push(buckets, api_key: str | None = None, url: str | None = None) -> None:
-    """Push a CostByLineProcessor.buckets dict. Keys are ``(chain, model)``
-    pairs, so a line that calls two models contributes two rows, each carrying
-    its own model and token counts rather than one blended model name. Rows
+    """Push a CostByLineProcessor.buckets dict. Keys are ``(chain, model,
+    tags)``, so a line that calls two models contributes two rows, each carrying
+    its own model and token counts rather than one blended model name — and a
+    line called under two different tag sets contributes two rows too. Rows
     carry no ``cost_usd``: pricing is the platform's, recomputed server-side
     from the model and the four token counts."""
     api_key = api_key or os.environ.get("AIGHT_API_KEY")
@@ -71,8 +72,11 @@ def push(buckets, api_key: str | None = None, url: str | None = None) -> None:
             "Project settings in your AIght Workspace at aight.studio)."
         )
     url = url or os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
-    rows = [
-        {
+    rows = []
+    for key, b in buckets.items():
+        # (chain, model, tags); a hand-built two-tuple key means "no tags".
+        chain, model, tags = (*key, ())[:3]
+        row = {
             "chain": [_frame_dict(fp, ln, fn) for fp, ln, fn in chain],
             "calls": b.calls,
             "model": model,
@@ -87,8 +91,10 @@ def push(buckets, api_key: str | None = None, url: str | None = None) -> None:
             "latency_ms": b.latency_ms,
             "trace_id": b.trace_id,
         }
-        for (chain, model), b in buckets.items()
-    ]
+        # Omitted, not sent empty, when no tags scope was active.
+        if tags:
+            row["tags"] = dict(tags)
+        rows.append(row)
     if not rows:
         return
     body = json.dumps(rows).encode()
@@ -124,6 +130,8 @@ def push_event(
     timestamp: float | None = None,
     api_key: str | None = None,
     url: str | None = None,
+    agent: str | None = None,
+    tags: dict | None = None,
 ) -> dict:
     """Report a business KPI/event (a Stripe checkout, a signup, a support
     ticket closed, ...) to power the AIght Workspace's fleet view and hybrid
@@ -132,6 +140,16 @@ def push_event(
     trace_id defaults to the active TraceContext's trace_id if you're
     inside a `with TraceContext(...):` block — that gives the backend an
     EXPLICIT match instead of falling back to its time-window heuristic.
+
+    agent names the agent that produced the event: the same file path as the
+    outermost chain frame on its span rows, and the filepath push_value uses.
+    The server matches an event to a declared agent before it falls back to
+    shared tags or the time window.
+
+    tags defaults to the active `with aight.tags(...):` scope. An event matches
+    on a tag only when the same key=value is also on a span, and only when one
+    agent's spans carry it — a tag two agents share is ambiguous and is not
+    matched. Same limits as span tags (16 keys, 64/256 chars).
 
     Returns the ingest endpoint's JSON response, shaped
     {"ingested": n, "results": [...]} — each entry of "results" carries the
@@ -152,6 +170,11 @@ def push_event(
         "timestamp": timestamp if timestamp is not None else time.time(),
         "trace_id": trace_id or current_trace_id() or "",
     }
+    if agent:
+        event["agent"] = agent
+    event_tags = clean_tags(tags) if tags else current_tags()
+    if event_tags:
+        event["tags"] = event_tags
     body = json.dumps(event).encode()
     request = urllib.request.Request(
         url,
