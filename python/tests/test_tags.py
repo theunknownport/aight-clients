@@ -76,7 +76,7 @@ def test_limits_drop_and_warn_once_never_raise():
         aight.clean_tags(too_many)
     assert len(record) == 1 and again == [], "warned once, not per call"
     with pytest.warns(UserWarning):
-        cleaned = aight.clean_tags({"k" * 65: "v", "ok": "x" * 257, "fine": "x" * 256})
+        cleaned = aight.clean_tags({"k" * 65: "v", "": "v", "ok": "x" * 257, "fine": "x" * 256})
     assert cleaned == {"fine": "x" * 256}
     with aight.tags(too_many):  # the scope applies the same limits
         assert len(aight.current_tags()) == 16

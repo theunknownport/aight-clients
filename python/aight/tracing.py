@@ -87,8 +87,8 @@ def clean_tags(tags: dict | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in (tags or {}).items():
         key, value = str(key), str(value)
-        if len(key) > MAX_TAG_KEY:
-            _warn_once("key", f"tag key longer than {MAX_TAG_KEY} chars dropped: {key[:20]}...")
+        if not key or len(key) > MAX_TAG_KEY:
+            _warn_once("key", f"tag key empty or longer than {MAX_TAG_KEY} chars dropped: {key[:20]!r}")
             continue
         if len(value) > MAX_TAG_VALUE:
             _warn_once("value", f"tag {key!r} dropped: value longer than {MAX_TAG_VALUE} chars")

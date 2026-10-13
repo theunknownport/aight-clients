@@ -189,8 +189,8 @@ func mergeTags(base, add map[string]string) map[string]string {
 	for _, k := range keys {
 		v := add[k]
 		switch _, exists := out[k]; {
-		case len(k) > MaxTagKey:
-			warnOnce("key", fmt.Sprintf("tag key longer than %d chars dropped", MaxTagKey))
+		case k == "" || len(k) > MaxTagKey:
+			warnOnce("key", fmt.Sprintf("tag key empty or longer than %d chars dropped", MaxTagKey))
 		case len(v) > MaxTagValue:
 			warnOnce("value", fmt.Sprintf("tag %q dropped: value longer than %d chars", k, MaxTagValue))
 		case !exists && len(out) >= MaxTags:

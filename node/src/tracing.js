@@ -61,8 +61,8 @@ export function cleanTags(tags) {
   for (const [rawKey, rawValue] of Object.entries(tags || {})) {
     const key = String(rawKey)
     const value = String(rawValue)
-    if (key.length > MAX_TAG_KEY) {
-      warnOnce('key', `tag key longer than ${MAX_TAG_KEY} chars dropped: ${key.slice(0, 20)}...`)
+    if (!key || key.length > MAX_TAG_KEY) {
+      warnOnce('key', `tag key empty or longer than ${MAX_TAG_KEY} chars dropped: "${key.slice(0, 20)}"`)
       continue
     }
     if (value.length > MAX_TAG_VALUE) {

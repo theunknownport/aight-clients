@@ -370,7 +370,7 @@ test('tag limits drop extras and warn once, never throw', () => {
     withTags(tooMany, () => assert.equal(Object.keys(currentTags()).length, 16))
     withTags(tooMany, () => {})
     assert.equal(warnings.filter((w) => w.includes('more than 16')).length, 1)
-    withTags({ ['k'.repeat(65)]: 'v', ok: 'x'.repeat(257), fine: 'x'.repeat(256) }, () => {
+    withTags({ ['k'.repeat(65)]: 'v', '': 'v', ok: 'x'.repeat(257), fine: 'x'.repeat(256) }, () => {
       assert.deepEqual(currentTags(), { fine: 'x'.repeat(256) })
     })
     assert.equal(warnings.length, 3)

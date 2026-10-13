@@ -267,7 +267,7 @@ class RemoteTest {
                 // second time: no second warning
             }
             assertEquals(1, warnings.stream().filter(w -> w.contains("more than 16")).count(), warnings.toString());
-            try (var t = Tracing.tags(Map.of("k".repeat(65), "v", "ok", "x".repeat(257), "fine", "x".repeat(256)))) {
+            try (var t = Tracing.tags(Map.of("k".repeat(65), "v", "", "v", "ok", "x".repeat(257), "fine", "x".repeat(256)))) {
                 assertEquals(Map.of("fine", "x".repeat(256)), Tracing.currentTags());
             }
         } finally {

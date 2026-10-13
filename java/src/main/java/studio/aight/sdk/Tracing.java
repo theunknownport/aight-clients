@@ -90,8 +90,8 @@ public final class Tracing {
         }
         sorted.forEach((key, raw) -> {
             String value = String.valueOf(raw);
-            if (key.length() > MAX_TAG_KEY) {
-                warnOnce("key", "tag key longer than " + MAX_TAG_KEY + " chars dropped");
+            if (key.isEmpty() || key.length() > MAX_TAG_KEY) {
+                warnOnce("key", "tag key empty or longer than " + MAX_TAG_KEY + " chars dropped");
             } else if (value.length() > MAX_TAG_VALUE) {
                 warnOnce("value", "tag \"" + key + "\" dropped: value longer than " + MAX_TAG_VALUE + " chars");
             } else if (!out.containsKey(key) && out.size() >= MAX_TAGS) {

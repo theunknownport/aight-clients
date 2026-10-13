@@ -677,7 +677,7 @@ func TestTagLimitsDropAndWarnOnce(t *testing.T) {
 		t.Fatalf("want one warning, got %d: %s", c, logged.String())
 	}
 	got := TagsFrom(WithTags(context.Background(), map[string]string{
-		strings.Repeat("k", 65): "v", "ok": strings.Repeat("x", 257), "fine": strings.Repeat("x", 256),
+		strings.Repeat("k", 65): "v", "": "v", "ok": strings.Repeat("x", 257), "fine": strings.Repeat("x", 256),
 	}))
 	if len(got) != 1 || got["fine"] == "" {
 		t.Fatalf("over-long key and value must be dropped, got %#v", got)
