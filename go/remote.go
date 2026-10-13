@@ -256,7 +256,7 @@ type EventOptions struct {
 //
 // Returns the ingest endpoint's decoded JSON response, shaped
 // {"ingested": n, "results": [...]} — each entry of "results" carries the
-// match_type it resolved to (EXPLICIT/IMPLICIT/UNMATCHED). It is not the match
+// match_type it resolved to (EXPLICIT/DECLARED/TAGGED/IMPLICIT/UNMATCHED). It is not the match
 // result itself.
 func PushEvent(eventName string, value float64, opts EventOptions) (map[string]any, error) {
 	return PushEventCtx(context.Background(), eventName, value, opts)

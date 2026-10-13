@@ -156,7 +156,7 @@ export async function pushValue(valueByFile, { apiKey, url } = {}) {
  * spans carry it — a tag two agents share is ambiguous and is not matched.
  *
  * Returns the ingest endpoint's JSON response, {"ingested": n, "results": [...]}
- * — each result carries the match_type ("EXPLICIT"/"IMPLICIT"/"UNMATCHED") it
+ * — each result carries the match_type ("EXPLICIT"/"DECLARED"/"TAGGED"/"IMPLICIT"/"UNMATCHED") it
  * resolved to, plus its confidence_score. It is not the match result itself.
  */
 export async function pushEvent(

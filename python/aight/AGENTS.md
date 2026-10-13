@@ -53,11 +53,24 @@ traced_llm_call(
     trace_id="custom_event_id", 
     labels={"campaign": "black_friday"}
 )
+labels stay on the local OTel span and are not sent to the server, so they match nothing. To match events on business keys, use tags (step 9).
 8. Optional: Report the business event itself
 A trace_id or labels only tag the LLM cost side — to actually feed cost-vs-value matching, push the business event too (a Stripe checkout succeeding, a ticket closing, a signup). Give it a real event_name and value; leave trace_id unset to fall back to the active TraceContext:
 from aight.remote import push_event
 
 push_event("checkout_completed", value=49.0, currency="USD")
+9. Optional: Matching business events to agents
+Run the work inside a tags scope with the business keys this project already has, and declare the agent on the event:
+import os
+import aight.tracing as aight
+from aight.remote import push_event
+
+with aight.tags(order_id=order.id):
+    ...  # traced calls in here carry the tags
+    push_event("checkout_completed", value=49.0, agent=os.path.abspath(__file__))
+push_event uses the scope's tags when you pass no tags=.
+The server matches an event to an agent in this order, first single-agent answer wins: (1) trace_id the event shares with one agent's spans (EXPLICIT); (2) the event's declared agent — the first chain frame's filepath on that agent's span rows, the same string push_value uses (DECLARED); (3) a tag whose exact key=value is on both the event and spans of exactly one agent (TAGGED); (4) the time window — Scale plan only, and a guess (IMPLICIT). Otherwise UNMATCHED. Collected (external) agents are never matched.
+Tags only help when the same key=value is on both a span and the event. A tag two agents' spans share is ambiguous and is not matched — so tag with keys that identify the unit of work (order_id, ticket_id), not ones every agent sees. Only use keys this project really has; never invent ids. Limits: 16 tags, keys 1-64 chars, values up to 256 — extras are dropped with a one-time warning, never raised. The agent string must equal the outermost chain frame of this agent's rows (up to five user-code frames up) — check it in COST_PROCESSOR.buckets before relying on it.
 Guardrails
 Never fabricate a metric aight doesn't actually capture — latency included. It is never estimated, never inferred from how long the SDK took, and never defaulted to zero-with-a-mention; it is simply absent until the caller measures and passes it.
 Don't wrap the same call twice (Path A and Path B together).

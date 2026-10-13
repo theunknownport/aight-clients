@@ -141,6 +141,61 @@ aight.TracedLLMCallInfo(model, resp.Usage.InputTokens, resp.Usage.OutputTokens,
 aight.PushEvent("checkout.completed", 49.0, aight.EventOptions{TraceID: runID})
 ```
 
+## Matching business events to agents
+
+Give the server something to tie an event to the agent that produced it. Put
+the business keys you already have on the `context.Context` that the work runs
+under, and declare the agent on the event:
+
+```go
+ctx = aight.WithTags(ctx, map[string]string{"order_id": order.ID, "user_id": user.ID})
+
+aight.TracedLLMCallCtx(ctx, model, in, out, aight.CallInfo{}) // the row carries the tags
+// A request sent through TracedHTTPClient with this ctx (req.WithContext(ctx))
+// is tagged the same way.
+
+_, err := aight.PushEventCtx(ctx, "checkout.completed", 49.0, aight.EventOptions{
+	Agent: "/srv/app/agent.go", // the file path on this agent's span rows
+})
+```
+
+The server tries four signals, strongest first, and the first one that points
+at exactly one agent wins. The result's `match_type` says which:
+
+1. **`trace_id`** (`EXPLICIT`) — the event names a trace id that one agent's
+   spans also carry.
+2. **Declared agent** (`DECLARED`) — the event names its `agent`: the same
+   string as the first chain frame's `filepath` on that agent's span rows, and
+   the `filepath` `PushValue` uses. This SDK sends a one-frame chain whose path
+   is the compile-time path of the file that called `TracedLLMCallCtx`
+   (`runtime.Caller`), so declare that.
+3. **Shared tag** (`TAGGED`) — the event carries a tag whose exact
+   `key=value` also sits on span rows, and every span carrying it belongs to one
+   agent.
+4. **Time window** (`IMPLICIT`) — Scale plan only: the one agent that ran in the
+   15 minutes before the event. It is a guess, and its confidence is lower the
+   longer the gap.
+
+Otherwise the event is stored `UNMATCHED`. Collected (external) agents are
+never matched by any of these — their value is reported, not matched.
+
+Tags only help when the same `key=value` appears on **both** a span and the
+event: a tag on the event alone, or only on spans, matches nothing. A tag that
+two agents' spans both carry (a `user_id` both of them served) is ambiguous and
+is **not** matched — it says nothing about which agent earned the event, so the
+server falls through to the next signal rather than pick one. Values are
+strings (numbers are stringified); at most 16 tags, keys up to 64 characters,
+values up to 256, and no empty keys. Anything else is dropped with a one-time
+warning — never raised into your code. Calls on the same line under different
+tags are kept as separate rows, so a tag is never smeared across another
+order's spend.
+
+`PushEventCtx` sends `Agent` and `Tags` only when set. `EventOptions.Tags`
+replaces the ctx's tags for that event; leave it empty and the ctx's `WithTags`
+scope is used. `TracedLLMCall`, `TracedLLMCallInfo` and `PushEvent` are
+unchanged and carry no tags — they have no ctx to read them from. `WithTags`
+nests and merges (inner wins); `TagsFrom(ctx)` reads the current set.
+
 ## Auto-instrument: opt-in wrapping, not automation
 
 Go cannot patch a package at runtime — there is no monkey-patching, and no way

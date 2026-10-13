@@ -49,7 +49,7 @@ Such an agent shows a reported figure in the Workspace like any other. It never 
 A trace id makes the match between a run and its outcome explicit instead of a time-window guess. Pass one to the traced call:
 Tracing.tracedLlmCall(model, in, out, new Tracing.CallInfo(0, 0, 0, runId));
 Tracing.CallInfo is (cacheReadTokens, cacheCreationTokens, latencyMs, traceId) — the three-argument constructor and CallInfo.NONE both mean "nothing measured but the tokens", so pass zeros for what you don't have.
-Then report the outcome with the same id. pushEvent returns the ingest endpoint's parsed response ({"ingested": n, "results": [...]}, each result carrying its match_type and confidence_score) — read it if you want to know whether the match was EXPLICIT, IMPLICIT or UNMATCHED:
+Then report the outcome with the same id. pushEvent returns the ingest endpoint's parsed response ({"ingested": n, "results": [...]}, each result carrying its match_type and confidence_score) — read it if you want to know whether the match was EXPLICIT, DECLARED, TAGGED, IMPLICIT or UNMATCHED:
 Map<String, Object> response = Remote.pushEvent("checkout.completed", 49.0,
         EventOptions.defaults().withTraceId(runId));
 EventOptions.defaults() fills in a fresh event id, "USD", the current time and the environment's API key; withEventId / withTraceId / withCurrency / withTimestamp / withApiKey / withUrl override any of them. Only report an event whose value is real — never invent or estimate one.
@@ -58,6 +58,15 @@ Tracing resolves the calling frame with StackWalker, which reports a file basena
 Two files with the same name in different directories count as one agent, because the server groups spend by that string.
 Source snippets are read from that basename relative to the process working directory, so they only appear when the file sits in the directory the app was started from (running from a project root finds none of the files below it). A missing snippet shows as "not captured" in the Workspace; it is never an error and never breaks a traced call.
 Do not try to work around this by passing a path yourself — the API has no such parameter, and a classloader-based source lookup breaks once the app is packaged.
+9. Optional: Matching business events to agents
+Open a tags scope with the business keys this project already has, and declare the agent on the event:
+try (var t = Tracing.tags(Map.of("order_id", order.id()))) {
+    Tracing.tracedLlmCall(model, in, out);
+    Remote.pushEvent("checkout.completed", 49.0, EventOptions.defaults().withAgent("Agent.java"));
+}
+pushEvent uses the thread's scope when no withTags(...) is set. The scope is per thread: work on another thread needs its own scope.
+The server matches an event to an agent in this order, first single-agent answer wins: (1) trace_id the event shares with one agent's spans (EXPLICIT); (2) the event's declared agent — the first chain frame's filepath on that agent's span rows, the same string pushValue uses (DECLARED); (3) a tag whose exact key=value is on both the event and spans of exactly one agent (TAGGED); (4) the time window — Scale plan only, and a guess (IMPLICIT). Otherwise UNMATCHED. Collected (external) agents are never matched.
+Tags only help when the same key=value is on both a span and the event. A tag two agents' spans share is ambiguous and is not matched — so tag with keys that identify the unit of work (order_id, ticket_id), not ones every agent sees. Only use keys this project really has; never invent ids. Limits: 16 tags, keys 1-64 chars, values up to 256 — extras are dropped with a one-time warning, never raised. The agent string is the calling file's basename (step 8), e.g. Agent.java.
 Guardrails
 Never fabricate a metric aight doesn't actually capture.
 The platform prices; the SDK does not. It has no price table, tracedLlmCall returns void, and the pushed row carries model and tokens but no cost figure — so never state, print or return a cost as if the SDK produced it.

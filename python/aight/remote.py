@@ -153,7 +153,7 @@ def push_event(
 
     Returns the ingest endpoint's JSON response, shaped
     {"ingested": n, "results": [...]} — each entry of "results" carries the
-    match_type ("EXPLICIT"/"IMPLICIT"/"UNMATCHED") it resolved to, plus its
+    match_type ("EXPLICIT"/"DECLARED"/"TAGGED"/"IMPLICIT"/"UNMATCHED") it resolved to, plus its
     confidence_score. It is not the match result itself."""
     api_key = api_key or os.environ.get("AIGHT_API_KEY")
     if not api_key:
