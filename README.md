@@ -7,6 +7,20 @@ mints the API key). The Python install also carries four collectors and a
 proxy, which bring in the same spend from agents you run but did not write —
 see **Collectors, and the proxy** below.
 
+## Try it without an account
+
+To see what your Claude Code history would cost at API list prices:
+
+```bash
+pip install aight && aight-collect --report --all-projects
+```
+
+It reads the transcripts Claude Code already keeps on your machine and prints
+the cost by token type, step and model. Only the model names are sent, to look
+up their rates. Add `--since 2026-10-01` to narrow it to a date. Codex CLI,
+Gemini CLI and Aider have their own commands: `aight-collect-codex`,
+`aight-collect-gemini` and `aight-collect-aider`.
+
 Every SDK implements the same small surface:
 
 - **`tracedLlmCall(model, inputTokens, outputTokens)`** (naming varies by
