@@ -2,6 +2,7 @@ package aight
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -67,6 +68,8 @@ type spanRow struct {
 	// Empty when the caller never set one, in which case the backend matches
 	// the spend to business events by time window instead of explicitly.
 	TraceID string `json:"trace_id"`
+	// Omitted when no WithTags scope was active.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Push sends the processor's current buckets to your hosted AIght Workspace.
@@ -92,7 +95,7 @@ func Push(p *CostByLineProcessor, apiKey, url string) error {
 	}
 	rows := make([]spanRow, 0, len(snap))
 	for k, b := range snap {
-		rows = append(rows, spanRow{
+		row := spanRow{
 			Chain:        []spanFrame{frameFrom(k.Filepath, k.Lineno, k.Function)},
 			Calls:        b.Calls,
 			Model:        k.Model,
@@ -103,7 +106,11 @@ func Push(p *CostByLineProcessor, apiKey, url string) error {
 			CacheCreationTokens: b.CacheCreationTokens,
 			LatencyMs:           b.LatencyMs,
 			TraceID:             b.TraceID,
-		})
+		}
+		if k.Tags != "" {
+			_ = json.Unmarshal([]byte(k.Tags), &row.Tags) // our own encoding; cannot fail
+		}
+		rows = append(rows, row)
 	}
 
 	body, err := json.Marshal(rows)
@@ -212,6 +219,9 @@ type eventRow struct {
 	// Unix seconds, fractional — not milliseconds.
 	Timestamp float64 `json:"timestamp"`
 	TraceID   string  `json:"trace_id"`
+	// Both omitted when unset.
+	Agent string            `json:"agent,omitempty"`
+	Tags  map[string]string `json:"tags,omitempty"`
 }
 
 // EventOptions carries the optional half of PushEvent. Every zero value means
@@ -225,6 +235,15 @@ type EventOptions struct {
 	URL      string
 	// Timestamp is Unix seconds. Zero means now.
 	Timestamp float64
+	// Agent names the agent that produced the event: the same file path as
+	// the chain frame on its span rows, and the filepath PushValue uses. The
+	// server matches a declared agent before shared tags or the time window.
+	Agent string
+	// Tags defaults to the WithTags scope on PushEventCtx's ctx. An event
+	// matches on a tag only when the same key=value is also on a span, and
+	// only when one agent's spans carry it — a tag two agents share is
+	// ambiguous and is not matched.
+	Tags map[string]string
 }
 
 // PushEvent reports a business KPI — a Stripe checkout, a signup, a support
@@ -240,6 +259,12 @@ type EventOptions struct {
 // match_type it resolved to (EXPLICIT/IMPLICIT/UNMATCHED). It is not the match
 // result itself.
 func PushEvent(eventName string, value float64, opts EventOptions) (map[string]any, error) {
+	return PushEventCtx(context.Background(), eventName, value, opts)
+}
+
+// PushEventCtx is PushEvent under a ctx: the request uses it, and its WithTags
+// scope supplies the event's tags when opts.Tags is empty.
+func PushEventCtx(ctx context.Context, eventName string, value float64, opts EventOptions) (map[string]any, error) {
 	apiKey := opts.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("AIGHT_API_KEY")
@@ -271,6 +296,11 @@ func PushEvent(eventName string, value float64, opts EventOptions) (map[string]a
 		timestamp = float64(time.Now().UnixNano()) / 1e9
 	}
 
+	eventTags := TagsFrom(ctx)
+	if len(opts.Tags) > 0 {
+		eventTags = mergeTags(nil, opts.Tags)
+	}
+
 	body, err := json.Marshal(eventRow{
 		EventID:   eventID,
 		EventName: eventName,
@@ -278,11 +308,13 @@ func PushEvent(eventName string, value float64, opts EventOptions) (map[string]a
 		Currency:  currency,
 		Timestamp: timestamp,
 		TraceID:   opts.TraceID,
+		Agent:     opts.Agent,
+		Tags:      eventTags,
 	})
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
