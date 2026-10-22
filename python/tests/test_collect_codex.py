@@ -342,7 +342,9 @@ def test_the_push_carries_codex_as_the_badge(tmp_path, monkeypatch):
     sent = _recording_push(monkeypatch)
     path = _write(tmp_path, [_turn_context(), _token_count()])
 
-    assert main(["--root", str(path)]) == 0
+    # --all-time: the fixture's dates are fixed, and a first run only reads
+    # the last 24h, so without it this test fails a day after it was written.
+    assert main(["--root", str(path), "--all-time"]) == 0
 
     assert len(sent) == 1
     assert sent[0][1] == "codex"
@@ -357,7 +359,7 @@ def test_codex_home_moves_the_default_root(tmp_path, monkeypatch, capsys):
 
     assert codex._sessions_root() == tmp_path / "sessions"
     # No --root: the run has to find the file from CODEX_HOME alone.
-    assert main(["--dry-run"]) == 0
+    assert main(["--dry-run", "--all-time"]) == 0
 
     rows = _rows_from_stdout(capsys.readouterr().out)
     assert len(rows) == 1
