@@ -608,7 +608,8 @@ TOKEN_KINDS = (
 )
 
 
-def report(rows: list[dict], agent: str, prices: dict | None, top: int = 8) -> str:
+def report(rows: list[dict], agent: str, prices: dict | None, top: int = 8,
+           prog: str = "aight-collect") -> str:
     """A breakdown worth a screenshot: what the calls in `rows` would cost at
     list price, by token type, by step and by model. With `prices` None (the
     server was unreachable) it reports tokens instead of dollars."""
@@ -666,7 +667,12 @@ def report(rows: list[dict], agent: str, prices: dict | None, top: int = 8) -> s
     out += [line(k, v) for k, v in sorted(by_model.items(), key=lambda kv: -kv[1])[:top]]
     if unpriced:
         out += ["", "No list price yet for: " + ", ".join(sorted(unpriced)) + " (counted as $0)"]
-    out += ["", "Nothing was sent. Per line of your own agent's code: https://aight.studio"]
+    # The report is the hook, so it ends on the next two things to try: the
+    # free one first, then what only the hosted Workspace does.
+    out += ["", "Nothing was sent.",
+            f"  What one feature cost:  {prog} --report --since <commit>",
+            "  Keep the history:       drop --report to push it to the Workspace",
+            "                          (coding agents are on Pro: https://aight.studio)"]
     return "\n".join(out)
 
 
@@ -818,7 +824,7 @@ def main(config: Collector, argv: list[str] | None = None) -> int:
 
     if args.report:
         url = os.environ.get("AIGHT_INGEST_URL", DEFAULT_INGEST_URL)
-        print(report(rows, config.agent_id, fetch_prices(rows, url)))
+        print(report(rows, config.agent_id, fetch_prices(rows, url), prog=config.prog))
         return 0
     if args.dry_run:
         print(json.dumps(rows, indent=2))

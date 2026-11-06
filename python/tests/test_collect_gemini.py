@@ -276,7 +276,8 @@ def test_a_run_with_no_root_reads_this_project_directory(tmp_path, monkeypatch, 
     project.mkdir(parents=True)
     (project / "session-1.jsonl").write_text(json.dumps(_gemini("msg_1")))
 
-    assert main(["--dry-run"]) == 0
+    # --all-time: the fixture is dated, and a first run only reads the last 24h.
+    assert main(["--dry-run", "--all-time"]) == 0
 
     rows = _rows_from_stdout(capsys.readouterr().out)
     assert len(rows) == 1
@@ -292,7 +293,7 @@ def test_all_projects_reads_every_project_directory(tmp_path, monkeypatch, capsy
             json.dumps(_gemini(f"msg_{slug}", model=f"gemini-2.5-{slug}"))
         )
 
-    assert main(["--all-projects", "--dry-run"]) == 0
+    assert main(["--all-projects", "--dry-run", "--all-time"]) == 0
 
     rows = _rows_from_stdout(capsys.readouterr().out)
     assert {row["model"] for row in rows} == {"gemini-2.5-one", "gemini-2.5-two"}
