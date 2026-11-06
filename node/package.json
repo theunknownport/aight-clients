@@ -1,6 +1,6 @@
 {
   "name": "aight-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Attribute LLM spend to the exact source line, and push it to the AIght Workspace at aight.studio.",
   "keywords": [
     "llm",

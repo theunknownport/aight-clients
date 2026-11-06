@@ -8,7 +8,7 @@ export const DEFAULT_INGEST_URL = 'https://api.aight.studio/api/ingest/spans'
 
 // Must match projects.CURRENT_SDK_VERSIONS["node"] on the backend — bump
 // both together on release.
-export const SDK_VERSION = '0.1.0'
+export const SDK_VERSION = '0.2.0'
 
 function requireKey(apiKey) {
   const key = apiKey || process.env.AIGHT_API_KEY
